@@ -1,6 +1,8 @@
 # orleans.dev
 
-The source code for [orleans.dev](https://orleans.dev), the documentation site for [Microsoft Orleans](https://github.com/dotnet/orleans) — a cross-platform .NET framework for building robust, scalable distributed applications using the virtual actor model.
+> **Note:** This is a community-maintained site and is not the official Microsoft Orleans documentation. For official docs, visit [learn.microsoft.com/dotnet/orleans](https://learn.microsoft.com/dotnet/orleans).
+
+The source code for [orleans.dev](https://orleans.dev), a community documentation site for [Microsoft Orleans](https://github.com/dotnet/orleans) — a cross-platform .NET framework for building robust, scalable distributed applications using the virtual actor model.
 
 ## About Orleans
 
