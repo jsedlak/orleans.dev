@@ -1,0 +1,276 @@
+---
+title: Azure Storage
+description: Use Azure Table Storage, Blob Storage, and Queue Storage as providers for Orleans clustering, persistence, reminders, streaming, grain directory, and transactions.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Azure Storage is the most comprehensive provider for Orleans on Azure, covering clustering, grain persistence, reminders, streaming, grain directory, and transactions across its Table, Blob, and Queue sub-services.
+
+## Capabilities
+
+| Feature | Azure Service | Package |
+|---|---|---|
+| Clustering | Table Storage | `Microsoft.Orleans.Clustering.AzureStorage` |
+| Grain Persistence | Table Storage | `Microsoft.Orleans.Persistence.AzureStorage` |
+| Grain Persistence | Blob Storage | `Microsoft.Orleans.Persistence.AzureStorage` |
+| Reminders | Table Storage | `Microsoft.Orleans.Reminders.AzureStorage` |
+| Streaming | Queue Storage | `Microsoft.Orleans.Streaming.AzureStorage` |
+| Grain Directory | Table Storage | `Microsoft.Orleans.GrainDirectory.AzureStorage` |
+| Transactions | Table Storage | `Microsoft.Orleans.Transactions.AzureStorage` |
+
+## Installation
+
+Install the packages for the features you need:
+
+```bash
+# Clustering
+dotnet add package Microsoft.Orleans.Clustering.AzureStorage
+
+# Persistence (covers both Table and Blob storage)
+dotnet add package Microsoft.Orleans.Persistence.AzureStorage
+
+# Reminders
+dotnet add package Microsoft.Orleans.Reminders.AzureStorage
+
+# Streaming (Queue Storage)
+dotnet add package Microsoft.Orleans.Streaming.AzureStorage
+
+# Grain Directory
+dotnet add package Microsoft.Orleans.GrainDirectory.AzureStorage
+
+# Transactions
+dotnet add package Microsoft.Orleans.Transactions.AzureStorage
+```
+
+## Clustering
+
+Azure Table Storage stores silo membership information, allowing silos to discover each other and form a cluster.
+
+<Tabs>
+  <TabItem label="Silo">
+    ```csharp
+    siloBuilder.UseAzureStorageClustering(options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+    ```
+  </TabItem>
+  <TabItem label="Client">
+    ```csharp
+    clientBuilder.UseAzureStorageClustering(options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+    ```
+  </TabItem>
+  <TabItem label="Aspire">
+    ```csharp
+    // AppHost
+    var storage = builder.AddAzureStorage("storage");
+    var tables = storage.AddTables("tables");
+
+    var orleans = builder.AddOrleans("default")
+        .WithClustering(tables);
+    ```
+  </TabItem>
+</Tabs>
+
+## Grain Persistence
+
+Azure Storage supports two persistence backends: **Table Storage** for structured key-value data and **Blob Storage** for larger or unstructured state.
+
+### Table Storage
+
+Stores grain state as rows in Azure Table Storage. State is split across multiple properties if it exceeds the single-property size limit. Each grain's state is stored as a single table row keyed by grain type and identity.
+
+```csharp
+siloBuilder.AddAzureTableGrainStorage(
+    name: "tableStore",
+    configureOptions: options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+```
+
+### Blob Storage
+
+Stores grain state as individual blobs. Better suited for larger state objects since blobs support up to 200 GB compared to Table Storage's 1 MB row limit.
+
+```csharp
+siloBuilder.AddAzureBlobGrainStorage(
+    name: "blobStore",
+    configureOptions: options =>
+    {
+        options.BlobServiceClient = new BlobServiceClient(
+            new Uri("https://ACCOUNT.blob.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+```
+
+<Aside type="tip">
+  Use Table Storage for small, frequently accessed state (under 64 KB). Use Blob Storage when state objects are larger or when you need to store complex serialized graphs.
+</Aside>
+
+### Aspire
+
+```csharp
+// AppHost
+var storage = builder.AddAzureStorage("storage");
+var blobs = storage.AddBlobs("blobs");
+
+var orleans = builder.AddOrleans("default")
+    .WithGrainStorage("Default", blobs);
+```
+
+## Reminders
+
+Persistent reminders backed by Azure Table Storage survive silo restarts and grain deactivation.
+
+```csharp
+siloBuilder.UseAzureTableReminderService(options =>
+{
+    options.TableServiceClient = new TableServiceClient(
+        new Uri("https://ACCOUNT.table.core.windows.net"),
+        new DefaultAzureCredential());
+});
+```
+
+See the [Timers and Reminders](/guides/timers-and-reminders/) guide for usage patterns.
+
+## Streaming
+
+Azure Queue Storage provides a simple, cost-effective streaming backend. Pulling agents inside the silo poll queues for new messages and deliver them to stream consumers.
+
+```csharp
+siloBuilder.AddAzureQueueStreams("AzureQueueProvider", configurator =>
+{
+    configurator.ConfigureAzureQueue(options =>
+    {
+        options.QueueServiceClient = new QueueServiceClient(
+            new Uri("https://ACCOUNT.queue.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+});
+
+// Required: PubSub store for subscription metadata
+siloBuilder.AddAzureTableGrainStorage("PubSubStore", options =>
+{
+    options.TableServiceClient = new TableServiceClient(
+        new Uri("https://ACCOUNT.table.core.windows.net"),
+        new DefaultAzureCredential());
+});
+```
+
+<Aside>
+  Azure Queue Storage does not guarantee strict FIFO ordering in failure scenarios. It provides at-least-once delivery. For strict ordering or replay support, consider [Azure Event Hubs](/integrations/azure-event-hubs/) instead.
+</Aside>
+
+See the [Streaming](/guides/streaming/) guide for producer and consumer patterns.
+
+## Grain Directory
+
+An external grain directory backed by Azure Table Storage. Useful when you need grain location information to survive full cluster restarts.
+
+```csharp
+siloBuilder.AddAzureTableGrainDirectory(
+    "azure-directory",
+    options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+```
+
+Apply the directory to specific grains:
+
+```csharp
+[GrainDirectory(GrainDirectoryName = "azure-directory")]
+public class MyGrain : Grain, IMyGrain { }
+```
+
+## Transactions
+
+Azure Table Storage can store transaction logs for Orleans distributed ACID transactions.
+
+```csharp
+siloBuilder.UseTransactions();
+siloBuilder.AddAzureTableTransactionalStateStorage(
+    "TransactionStore",
+    options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+```
+
+Use transactional state in a grain:
+
+```csharp
+public class BankAccountGrain : Grain, IBankAccountGrain
+{
+    private readonly ITransactionalState<Balance> _balance;
+
+    public BankAccountGrain(
+        [TransactionalState("balance", "TransactionStore")]
+        ITransactionalState<Balance> balance)
+    {
+        _balance = balance;
+    }
+
+    public Task Deposit(decimal amount) =>
+        _balance.PerformUpdate(x => x.Value += amount);
+
+    public Task<decimal> GetBalance() =>
+        _balance.PerformRead(x => x.Value);
+}
+```
+
+## Authentication
+
+All Azure Storage providers support `DefaultAzureCredential` for passwordless authentication (recommended) and connection strings for simpler setups.
+
+<Tabs>
+  <TabItem label="DefaultAzureCredential">
+    ```csharp
+    options.TableServiceClient = new TableServiceClient(
+        new Uri("https://ACCOUNT.table.core.windows.net"),
+        new DefaultAzureCredential());
+    ```
+  </TabItem>
+  <TabItem label="Connection String">
+    ```csharp
+    options.TableServiceClient = new TableServiceClient(
+        "DefaultEndpointsProtocol=https;AccountName=ACCOUNT;AccountKey=KEY;");
+    ```
+  </TabItem>
+</Tabs>
+
+<Aside type="tip">
+  Use `DefaultAzureCredential` in production. It works with Managed Identity, Azure CLI, Visual Studio, and other credential sources without storing secrets in your code or configuration.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Azure Cosmos DB" icon="azure">
+    Globally distributed NoSQL database for clustering, persistence, and reminders.
+    [View docs](/integrations/azure-cosmos-db/)
+  </Card>
+  <Card title="Azure Event Hubs" icon="azure">
+    High-throughput partitioned event streaming with replay support.
+    [View docs](/integrations/azure-event-hubs/)
+  </Card>
+  <Card title="Grain Persistence Guide" icon="document">
+    Learn how to add durable state to grains with `[PersistentState]`.
+    [Learn more](/guides/grain-persistence/)
+  </Card>
+</CardGrid>

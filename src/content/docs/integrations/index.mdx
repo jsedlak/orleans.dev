@@ -1,0 +1,91 @@
+---
+title: Integrations Overview
+description: Orleans provider ecosystem — storage, clustering, streaming, reminders, and more for every major backend.
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans uses a **provider model** that lets you plug in different backends for clustering, grain persistence, reminders, streaming, grain directory, and transactions. You choose the technologies that fit your infrastructure and Orleans handles the wiring.
+
+## Provider Capabilities
+
+Each backend supports a different set of Orleans features. Use this matrix to find the right provider for your needs.
+
+| Backend | Clustering | Persistence | Reminders | Streaming | Grain Directory | Transactions |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| [Azure Storage](/integrations/azure-storage/) | Table | Table, Blob | Table | Queue | Table | Table |
+| [Azure Cosmos DB](/integrations/azure-cosmos-db/) | Yes | Yes | Yes | — | — | — |
+| [Azure Event Hubs](/integrations/azure-event-hubs/) | — | — | — | Yes | — | — |
+| [Redis](/integrations/redis/) | Yes | Yes | Yes | — | Yes | — |
+| [ADO.NET](/integrations/ado-net/) | Yes | Yes | Yes | — | — | — |
+| [AWS DynamoDB](/integrations/aws-dynamodb/) | Yes | Yes | Yes | — | — | — |
+| [AWS SQS](/integrations/aws-sqs/) | — | — | — | Yes | — | — |
+| [MongoDB](/integrations/mongodb/) | Yes | Yes | Yes | — | — | — |
+| [Apache Kafka](/integrations/apache-kafka/) | — | — | — | Yes | — | — |
+| [Apache ZooKeeper](/integrations/apache-zookeeper/) | Yes | — | — | — | — | — |
+| [HashiCorp Consul](/integrations/hashicorp-consul/) | Yes | — | — | — | — | — |
+
+<Aside type="tip">
+  For development and testing, Orleans includes in-memory providers for clustering, persistence, reminders, and streaming. These are built into `Microsoft.Orleans.Server` and require no additional packages. See the [Getting Started](/guides/getting-started/) guide for an example.
+</Aside>
+
+## Choosing a Provider
+
+**Cloud-native on Azure** — [Azure Storage](/integrations/azure-storage/) covers clustering, persistence, reminders, streaming, and transactions in a single service. Pair it with [Azure Event Hubs](/integrations/azure-event-hubs/) for high-throughput streaming.
+
+**Cloud-native on AWS** — Use [DynamoDB](/integrations/aws-dynamodb/) for clustering, persistence, and reminders, and [SQS](/integrations/aws-sqs/) for streaming.
+
+**Redis everywhere** — [Redis](/integrations/redis/) is a strong choice when you want a single backend for clustering, persistence, reminders, and grain directory across any cloud or on-premises environment.
+
+**Relational databases** — [ADO.NET](/integrations/ado-net/) supports SQL Server, PostgreSQL, MySQL, and MariaDB for clustering, persistence, and reminders.
+
+**Event streaming** — [Azure Event Hubs](/integrations/azure-event-hubs/) for high-throughput partitioned streams, [Apache Kafka](/integrations/apache-kafka/) for on-premises or multi-cloud event infrastructure, and [AWS SQS](/integrations/aws-sqs/) or [Azure Queue Storage](/integrations/azure-storage/) for simpler queue-based streaming.
+
+## All Providers
+
+<CardGrid>
+  <Card title="Azure Storage" icon="azure">
+    Table Storage, Blob Storage, and Queue Storage for clustering, persistence, reminders, streaming, grain directory, and transactions.
+    [View docs](/integrations/azure-storage/)
+  </Card>
+  <Card title="Azure Cosmos DB" icon="azure">
+    Globally distributed NoSQL database for clustering, persistence, and reminders.
+    [View docs](/integrations/azure-cosmos-db/)
+  </Card>
+  <Card title="Azure Event Hubs" icon="azure">
+    High-throughput partitioned event streaming with replay support.
+    [View docs](/integrations/azure-event-hubs/)
+  </Card>
+  <Card title="Redis" icon="redis">
+    In-memory data store for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="ADO.NET" icon="setting">
+    SQL Server, PostgreSQL, MySQL, and MariaDB for clustering, persistence, and reminders.
+    [View docs](/integrations/ado-net/)
+  </Card>
+  <Card title="AWS DynamoDB" icon="setting">
+    Managed NoSQL database for clustering, persistence, and reminders on AWS.
+    [View docs](/integrations/aws-dynamodb/)
+  </Card>
+  <Card title="AWS SQS" icon="setting">
+    Queue-based streaming using Amazon Simple Queue Service.
+    [View docs](/integrations/aws-sqs/)
+  </Card>
+  <Card title="MongoDB" icon="setting">
+    Community-maintained provider for clustering, persistence, and reminders.
+    [View docs](/integrations/mongodb/)
+  </Card>
+  <Card title="Apache Kafka" icon="setting">
+    Community-maintained stream provider for event-driven architectures.
+    [View docs](/integrations/apache-kafka/)
+  </Card>
+  <Card title="Apache ZooKeeper" icon="setting">
+    Distributed coordination service for cluster membership.
+    [View docs](/integrations/apache-zookeeper/)
+  </Card>
+  <Card title="HashiCorp Consul" icon="setting">
+    Service discovery and Key/Value store for cluster membership.
+    [View docs](/integrations/hashicorp-consul/)
+  </Card>
+</CardGrid>

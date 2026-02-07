@@ -1,0 +1,97 @@
+---
+title: AWS SQS
+description: Use Amazon Simple Queue Service as a streaming provider for Orleans.
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Amazon Simple Queue Service (SQS) is a fully managed message queuing service on AWS. The Orleans SQS stream provider uses SQS queues to transport stream events between producers and consumers.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Streaming | `Microsoft.Orleans.Streaming.SQS` |
+
+## Installation
+
+```bash
+dotnet add package Microsoft.Orleans.Streaming.SQS
+```
+
+## Configuration
+
+### Silo
+
+```csharp
+siloBuilder.AddSqsStreams("SQSProvider", configurator =>
+{
+    configurator.ConfigureSqs(options =>
+    {
+        options.Service = "us-east-1";
+    });
+});
+
+// Required: PubSub store for subscription metadata
+siloBuilder.AddDynamoDBGrainStorage("PubSubStore", options =>
+{
+    options.Service = "us-east-1";
+});
+```
+
+### Client
+
+```csharp
+clientBuilder.AddSqsStreams("SQSProvider", configurator =>
+{
+    configurator.ConfigureSqs(options =>
+    {
+        options.Service = "us-east-1";
+    });
+});
+```
+
+## How It Works
+
+The SQS stream provider creates a set of SQS queues that Orleans uses to transport events. Pulling agents running inside silos poll these queues and deliver messages to the appropriate stream consumers.
+
+Key characteristics:
+
+- **At-least-once delivery** — SQS guarantees each message is delivered at least once. Consumers should be idempotent.
+- **No strict FIFO** — Standard SQS queues provide best-effort ordering. Use this provider when strict ordering is not required.
+- **Automatic scaling** — SQS handles throughput scaling transparently.
+
+<Aside>
+  SQS streams provide at-least-once delivery without strict ordering guarantees. For ordered, replayable streams on AWS, consider combining with a Kafka-compatible service like Amazon MSK and the [Apache Kafka](/integrations/apache-kafka/) provider.
+</Aside>
+
+## Authentication
+
+The SQS provider uses the AWS SDK credential resolution chain, the same as the [DynamoDB provider](/integrations/aws-dynamodb/). Use IAM roles in production.
+
+```csharp
+// On EC2, ECS, or Lambda — credentials are provided automatically
+configurator.ConfigureSqs(options =>
+{
+    options.Service = "us-east-1";
+});
+```
+
+See the [Streaming](/guides/streaming/) guide for producer and consumer patterns.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="AWS DynamoDB" icon="setting">
+    Clustering, persistence, and reminders on AWS with DynamoDB.
+    [View docs](/integrations/aws-dynamodb/)
+  </Card>
+  <Card title="Streaming Guide" icon="rocket">
+    Build reactive pipelines with Orleans Streams for real-time event processing.
+    [Learn more](/guides/streaming/)
+  </Card>
+  <Card title="Azure Event Hubs" icon="azure">
+    High-throughput partitioned event streaming with replay support.
+    [View docs](/integrations/azure-event-hubs/)
+  </Card>
+</CardGrid>

@@ -1,0 +1,167 @@
+---
+title: MongoDB
+description: Use MongoDB as a community-maintained provider for Orleans clustering, grain persistence, and reminders.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+MongoDB is a document database that stores data in flexible JSON-like documents. The community-maintained `Orleans.Providers.MongoDB` package provides clustering, grain persistence, reminders, and grain directory backed by MongoDB.
+
+<Aside>
+  This is a **community-maintained** provider from [OrleansContrib](https://github.com/OrleansContrib/Orleans.Providers.MongoDB), not an official Microsoft package. It is widely used and actively maintained.
+</Aside>
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Orleans.Providers.MongoDB` |
+| Grain Persistence | `Orleans.Providers.MongoDB` |
+| Reminders | `Orleans.Providers.MongoDB` |
+
+## Installation
+
+All features are included in a single package:
+
+```bash
+dotnet add package Orleans.Providers.MongoDB
+```
+
+## MongoDB Client Setup
+
+All MongoDB providers share a single `IMongoClient` instance registered on the silo. Register it first:
+
+```csharp
+siloBuilder.UseMongoDBClient("mongodb://localhost:27017");
+```
+
+## Clustering
+
+MongoDB stores silo membership data as documents in a configurable collection.
+
+```csharp
+siloBuilder.UseMongoDBClient("mongodb://localhost:27017")
+    .UseMongoDBClustering(options =>
+    {
+        options.DatabaseName = "OrleansCluster";
+    });
+```
+
+Client configuration:
+
+```csharp
+clientBuilder.UseMongoDBClient("mongodb://localhost:27017")
+    .UseMongoDBClustering(options =>
+    {
+        options.DatabaseName = "OrleansCluster";
+    });
+```
+
+## Grain Persistence
+
+Grain state is stored as MongoDB documents. The provider serializes state to BSON and stores it in a configurable database and collection.
+
+```csharp
+siloBuilder.AddMongoDBGrainStorage(
+    name: "mongoStore",
+    configureOptions: options =>
+    {
+        options.DatabaseName = "OrleansGrains";
+        options.CollectionPrefix = "Grains";
+    });
+```
+
+### Configuration Options
+
+| Option | Description | Default |
+|---|---|---|
+| `DatabaseName` | MongoDB database name | Required |
+| `CollectionPrefix` | Prefix for collection names | `""` |
+| `CreateShardKeyForCosmos` | Create a shard key if using Azure Cosmos DB for MongoDB API | `false` |
+
+See the [Grain Persistence](/guides/grain-persistence/) guide for usage patterns with `[PersistentState]`.
+
+## Reminders
+
+Persistent reminders stored as MongoDB documents.
+
+```csharp
+siloBuilder.UseMongoDBReminders(options =>
+{
+    options.DatabaseName = "OrleansReminders";
+});
+```
+
+See the [Timers and Reminders](/guides/timers-and-reminders/) guide for usage patterns.
+
+## Complete Example
+
+A full MongoDB-backed silo configuration:
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseMongoDBClient("mongodb://localhost:27017");
+
+    siloBuilder.UseMongoDBClustering(options =>
+    {
+        options.DatabaseName = "OrleansCluster";
+    });
+
+    siloBuilder.AddMongoDBGrainStorage("Default", options =>
+    {
+        options.DatabaseName = "OrleansGrains";
+    });
+
+    siloBuilder.UseMongoDBReminders(options =>
+    {
+        options.DatabaseName = "OrleansReminders";
+    });
+});
+
+builder.Build().Run();
+```
+
+## Authentication
+
+Pass credentials through the MongoDB connection string:
+
+<Tabs>
+  <TabItem label="Username / Password">
+    ```csharp
+    siloBuilder.UseMongoDBClient(
+        "mongodb://username:password@localhost:27017/?authSource=admin");
+    ```
+  </TabItem>
+  <TabItem label="Replica Set">
+    ```csharp
+    siloBuilder.UseMongoDBClient(
+        "mongodb://host1:27017,host2:27017,host3:27017/?replicaSet=myReplicaSet");
+    ```
+  </TabItem>
+  <TabItem label="Atlas (Cloud)">
+    ```csharp
+    siloBuilder.UseMongoDBClient(
+        "mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority");
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Redis" icon="redis">
+    Cloud-agnostic provider for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="ADO.NET" icon="setting">
+    Relational database providers for SQL Server, PostgreSQL, and MySQL.
+    [View docs](/integrations/ado-net/)
+  </Card>
+  <Card title="Grain Persistence Guide" icon="document">
+    Learn how to add durable state to grains with `[PersistentState]`.
+    [Learn more](/guides/grain-persistence/)
+  </Card>
+</CardGrid>
