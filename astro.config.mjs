@@ -16,13 +16,17 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: "Guides",
+          label: "Getting Started",
           items: [
-            // Each item here is one entry in the navigation menu.
             { label: "Getting Started", slug: "guides/getting-started" },
-            { label: "Grain Persistence", slug: "guides/grain-persistence" },
-            { label: "Streaming", slug: "guides/streaming" },
-            { label: "Timers and Reminders", slug: "guides/timers-and-reminders" },
+          ],
+        },
+        {
+          label: "Features",
+          items: [
+            { label: "Grain Persistence", slug: "features/grain-persistence" },
+            { label: "Streaming", slug: "features/streaming" },
+            { label: "Timers and Reminders", slug: "features/timers-and-reminders" },
           ],
         },
         {
