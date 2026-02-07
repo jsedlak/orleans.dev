@@ -33,9 +33,19 @@ export default defineConfig({
             link: "features/grain-persistence",
             icon: "puzzle",
             items: [
-              { label: "Grain Persistence", slug: "features/grain-persistence" },
+              {
+                label: "Overview",
+                slug: "features",
+              },
+              {
+                label: "Grain Persistence",
+                slug: "features/grain-persistence",
+              },
               { label: "Streaming", slug: "features/streaming" },
-              { label: "Timers and Reminders", slug: "features/timers-and-reminders" },
+              {
+                label: "Timers and Reminders",
+                slug: "features/timers-and-reminders",
+              },
             ],
           },
           {
@@ -45,16 +55,28 @@ export default defineConfig({
             items: [
               { label: "Overview", slug: "integrations" },
               { label: "Azure Storage", slug: "integrations/azure-storage" },
-              { label: "Azure Cosmos DB", slug: "integrations/azure-cosmos-db" },
-              { label: "Azure Event Hubs", slug: "integrations/azure-event-hubs" },
+              {
+                label: "Azure Cosmos DB",
+                slug: "integrations/azure-cosmos-db",
+              },
+              {
+                label: "Azure Event Hubs",
+                slug: "integrations/azure-event-hubs",
+              },
               { label: "Redis", slug: "integrations/redis" },
               { label: "ADO.NET", slug: "integrations/ado-net" },
               { label: "AWS DynamoDB", slug: "integrations/aws-dynamodb" },
               { label: "AWS SQS", slug: "integrations/aws-sqs" },
               { label: "MongoDB", slug: "integrations/mongodb" },
               { label: "Apache Kafka", slug: "integrations/apache-kafka" },
-              { label: "Apache ZooKeeper", slug: "integrations/apache-zookeeper" },
-              { label: "HashiCorp Consul", slug: "integrations/hashicorp-consul" },
+              {
+                label: "Apache ZooKeeper",
+                slug: "integrations/apache-zookeeper",
+              },
+              {
+                label: "HashiCorp Consul",
+                slug: "integrations/hashicorp-consul",
+              },
             ],
           },
           {
