@@ -9,13 +9,15 @@ import { cookieConfig } from "./src/config/cookie.config";
 export default defineConfig({
   integrations: [
     starlight({
-      customCss: ["./src/styles/cookieconsent-custom.css"],
       title: "Orleans",
       logo: {
         src: "./src/assets/logo_full.png",
         replacesTitle: true,
       },
-      customCss: ["./src/styles/global.css"],
+      customCss: [
+        "./src/styles/cookieconsent-custom.css",
+        "./src/styles/global.css",
+      ],
       social: [
         {
           icon: "github",
