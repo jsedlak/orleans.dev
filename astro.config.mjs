@@ -8,6 +8,11 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Orleans",
+      logo: {
+        src: "./src/assets/logo_full.png",
+        replacesTitle: true,
+      },
+      customCss: ["./src/styles/global.css"],
       social: [
         {
           icon: "github",
