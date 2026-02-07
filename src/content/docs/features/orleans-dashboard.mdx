@@ -1,0 +1,133 @@
+---
+title: Orleans Dashboard
+description: Built-in web-based monitoring tool providing real-time visibility into cluster health, silo status, grain activations, and call latency.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+The **Orleans Dashboard** is a community-maintained web-based monitoring tool that provides real-time visibility into your Orleans cluster. It shows silo status, grain activations, method call statistics, and more — all through a browser-based UI.
+
+## Setup
+
+### Install the Package
+
+```bash
+dotnet add package OrleansDashboard
+```
+
+### Configure the Silo
+
+```csharp
+siloBuilder.UseDashboard(options =>
+{
+    options.Port = 8080;
+    options.Host = "*";
+});
+```
+
+The dashboard is now accessible at `http://localhost:8080`.
+
+### Configuration Options
+
+| Option | Default | Description |
+|---|---|---|
+| `Port` | `8080` | The port the dashboard web server listens on. |
+| `Host` | `"*"` | The host to bind to. |
+| `BasePath` | `"/"` | Base URL path for the dashboard. |
+| `CounterUpdateIntervalMs` | `1000` | How often to refresh statistics (milliseconds). |
+| `HideTrace` | `false` | Hide the trace/log viewer. |
+
+## Co-Hosting with ASP.NET Core
+
+When Orleans is hosted alongside ASP.NET Core, you can embed the dashboard into the existing web application instead of running a separate server:
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseDashboard();
+});
+
+var app = builder.Build();
+
+app.Map("/dashboard", x => x.UseOrleansDashboard());
+
+app.Run();
+```
+
+This makes the dashboard available at `/dashboard` on the same port as your web application.
+
+## Dashboard Features
+
+### Cluster Overview
+
+- **Silo status** — see all silos in the cluster, their status (active, joining, dead), and uptime.
+- **Total activations** — aggregate count of grain activations across the cluster.
+- **Message throughput** — messages sent and received per second.
+
+### Grain Statistics
+
+- **Activations by type** — breakdown of active grains by grain type.
+- **Top grains** — most active grains ranked by message count.
+- **Grain method calls** — per-method call counts, success rates, and average latency.
+
+### Silo Details
+
+- **Per-silo metrics** — CPU, memory, activation count, and message rates for each silo.
+- **Silo history** — track when silos joined or left the cluster.
+
+### Reminders
+
+- **Active reminders** — view all registered reminders, their periods, and next fire times.
+
+### Log Streaming
+
+- **Live logs** — stream silo logs in real time through the dashboard UI.
+
+<Aside type="caution">
+  The dashboard adds overhead by collecting statistics from all silos. In high-throughput production environments, consider using [OpenTelemetry-based metrics](/features/metrics-and-monitoring/) instead for lower overhead, and reserve the dashboard for development or staging.
+</Aside>
+
+## Securing the Dashboard
+
+In production, secure the dashboard behind authentication:
+
+```csharp
+app.Map("/dashboard", dashboardApp =>
+{
+    dashboardApp.UseAuthentication();
+    dashboardApp.UseAuthorization();
+    dashboardApp.UseOrleansDashboard();
+}).RequireAuthorization("AdminOnly");
+```
+
+Or restrict access by network:
+
+```csharp
+siloBuilder.UseDashboard(options =>
+{
+    options.Host = "127.0.0.1"; // Only accessible locally
+});
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Metrics & Monitoring" icon="document">
+    Use OpenTelemetry metrics for production-grade monitoring.
+    [Learn more](/features/metrics-and-monitoring/)
+  </Card>
+  <Card title="Distributed Tracing" icon="open-book">
+    Add end-to-end request tracing for grain calls.
+    [Learn more](/features/distributed-tracing/)
+  </Card>
+  <Card title="Silo Clustering" icon="puzzle">
+    Understand the cluster that the dashboard monitors.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="ASP.NET Core Co-Hosting" icon="puzzle">
+    Host the dashboard alongside your web application.
+    [Learn more](/features/aspnet-core-co-hosting/)
+  </Card>
+</CardGrid>

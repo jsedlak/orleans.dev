@@ -1,0 +1,141 @@
+---
+title: Grain Directory
+description: Learn how Orleans maps grain identities to physical silo locations using a distributed directory.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+The **grain directory** is a distributed data structure that maps grain identities to their physical locations (silo addresses) in the cluster. When a message is sent to a grain, the directory resolves the grain's identity to the silo hosting its activation, enabling location-transparent routing.
+
+## How It Works
+
+<Steps>
+1. **First call** — when a grain is called for the first time, the runtime checks the directory for an existing activation.
+
+2. **Cache miss** — if no activation exists, Orleans selects a silo using the grain's [placement strategy](/features/grain-placement-strategies/) and creates a new activation.
+
+3. **Registration** — the new activation's location is registered in the directory.
+
+4. **Subsequent calls** — future calls resolve the grain's location from the directory (or a local cache) and route directly to the hosting silo.
+
+5. **Deactivation** — when a grain is deactivated, its entry is removed from the directory.
+</Steps>
+
+## Default: Distributed Hash Table
+
+By default, Orleans uses a **distributed hash table (DHT)** for the grain directory. Each silo is responsible for a partition of the directory, determined by consistent hashing. There is no single point of failure — directory data is distributed across the cluster.
+
+- **Partition ownership** — each grain identity hashes to a specific silo that "owns" that directory entry.
+- **Single activation guarantee** — the directory ensures at most one activation exists per grain identity (except for [stateless workers](/features/stateless-worker-grains/)).
+- **Automatic rebalancing** — when silos join or leave, directory partitions are rebalanced.
+
+<Aside>
+  The in-memory distributed directory requires no external storage but loses entries when silos crash. When a silo fails, grains it owned directory entries for may briefly have stale routes until the directory recovers.
+</Aside>
+
+## Pluggable Grain Directory
+
+Orleans supports pluggable grain directory implementations for scenarios that require stronger consistency or external storage.
+
+### Redis Grain Directory
+
+Store grain directory entries in Redis for faster recovery after silo failures:
+
+**Package:** `Microsoft.Orleans.GrainDirectory.Redis`
+
+```csharp
+siloBuilder.UseRedisGrainDirectoryAsDefault(options =>
+{
+    options.ConfigurationOptions = new()
+    {
+        EndPoints = { "localhost:6379" }
+    };
+});
+```
+
+### Azure Table Grain Directory
+
+**Package:** `Microsoft.Orleans.GrainDirectory.AzureStorage`
+
+```csharp
+siloBuilder.UseAzureStorageGrainDirectoryAsDefault(options =>
+{
+    options.TableServiceClient = new TableServiceClient(connectionString);
+});
+```
+
+### Per-Grain Directory Configuration
+
+You can assign different directory implementations to different grain types:
+
+```csharp
+// Default for all grains
+siloBuilder.UseRedisGrainDirectoryAsDefault(options => { /* ... */ });
+
+// Override for specific grain type
+siloBuilder.AddAzureStorageGrainDirectory(
+    "azure-directory",
+    options => { /* ... */ });
+```
+
+```csharp
+[GrainDirectory(GrainDirectoryName = "azure-directory")]
+public class SpecialGrain : Grain, ISpecialGrain
+{
+    // Uses Azure Storage grain directory
+}
+```
+
+## Directory Caching
+
+Each silo maintains a **local cache** of directory entries to avoid remote lookups on every grain call. The cache is invalidated when:
+
+- A grain is deactivated.
+- A silo fails and its directory entries are invalidated.
+- A cache entry expires.
+
+```csharp
+siloBuilder.Configure<GrainDirectoryOptions>(options =>
+{
+    options.CachingStrategy = GrainDirectoryOptions.CachingStrategyType.Adaptive;
+});
+```
+
+| Strategy | Description |
+|---|---|
+| `Adaptive` | Cache entries with adaptive TTL based on access patterns (default). |
+| `LRU` | Least-recently-used eviction with fixed cache size. |
+| `Custom` | Provide your own caching implementation. |
+
+## Duplicate Activation Detection
+
+In rare cases (e.g., network partitions), two activations of the same grain may briefly coexist. The directory detects and resolves these duplicates:
+
+1. When a duplicate is detected, one activation is chosen as the winner.
+2. The losing activation is deactivated.
+3. Messages are re-routed to the surviving activation.
+
+<Aside type="tip">
+  The single-activation guarantee is eventually consistent. During transient network partitions, brief duplicates are possible. Design grains to tolerate idempotent message replay if your application requires strict consistency.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Silo Clustering" icon="puzzle">
+    Understand how silos discover each other and detect failures.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Grain Placement Strategies" icon="random">
+    Control where grains are activated in the cluster.
+    [Learn more](/features/grain-placement-strategies/)
+  </Card>
+  <Card title="Grain Migration" icon="right-arrow">
+    Migrate grains between silos without losing state.
+    [Learn more](/features/grain-migration/)
+  </Card>
+  <Card title="Grain Identity & Lifecycle" icon="setting">
+    Understand grain identities and activation management.
+    [Learn more](/features/grain-identity-and-lifecycle/)
+  </Card>
+</CardGrid>

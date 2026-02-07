@@ -1,0 +1,170 @@
+---
+title: Cancellation Tokens
+description: Pass CancellationToken parameters on grain methods to enable cooperative cancellation of long-running operations.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans supports passing `CancellationToken` and `GrainCancellationToken` parameters on grain interface methods. This enables cooperative cancellation of long-running grain operations, either explicitly by the caller or automatically via timeout.
+
+## GrainCancellationToken
+
+`GrainCancellationToken` is Orleans' distributed cancellation token. It wraps a standard `CancellationToken` and propagates cancellation across grain boundaries.
+
+### Defining a Cancellable Method
+
+Add a `GrainCancellationToken` parameter to the grain interface method:
+
+```csharp
+public interface ISearchGrain : IGrainWithStringKey
+{
+    Task<List<SearchResult>> Search(string query, GrainCancellationToken cancellation);
+}
+```
+
+### Implementing a Cancellable Method
+
+Use the inner `CancellationToken` from the `GrainCancellationToken` to check for cancellation:
+
+```csharp
+public class SearchGrain : Grain, ISearchGrain
+{
+    public async Task<List<SearchResult>> Search(
+        string query, GrainCancellationToken cancellation)
+    {
+        var results = new List<SearchResult>();
+        var ct = cancellation.CancellationToken;
+
+        foreach (var shard in GetShards())
+        {
+            ct.ThrowIfCancellationRequested();
+            var shardResults = await SearchShardAsync(shard, query, ct);
+            results.AddRange(shardResults);
+        }
+
+        return results;
+    }
+}
+```
+
+### Cancelling from the Caller
+
+Create a `GrainCancellationTokenSource` and pass its token to the grain:
+
+```csharp
+var grain = grains.GetGrain<ISearchGrain>("index");
+var gcts = new GrainCancellationTokenSource();
+
+// Cancel after 5 seconds
+_ = Task.Delay(TimeSpan.FromSeconds(5))
+    .ContinueWith(_ => gcts.Cancel());
+
+try
+{
+    var results = await grain.Search("orleans", gcts.Token);
+}
+catch (OperationCanceledException)
+{
+    // The search was cancelled
+}
+```
+
+## Standard CancellationToken
+
+Starting with Orleans 7, you can also use the standard `System.Threading.CancellationToken` directly on grain methods:
+
+```csharp
+public interface IProcessorGrain : IGrainWithStringKey
+{
+    Task<ProcessResult> ProcessData(byte[] data, CancellationToken cancellationToken);
+}
+```
+
+```csharp
+public class ProcessorGrain : Grain, IProcessorGrain
+{
+    public async Task<ProcessResult> ProcessData(
+        byte[] data, CancellationToken cancellationToken)
+    {
+        // Use the token directly with async APIs
+        var parsed = await ParseAsync(data, cancellationToken);
+        var result = await TransformAsync(parsed, cancellationToken);
+        return result;
+    }
+}
+```
+
+Calling with a standard `CancellationToken`:
+
+```csharp
+using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+var grain = grains.GetGrain<IProcessorGrain>("worker-1");
+var result = await grain.ProcessData(data, cts.Token);
+```
+
+<Aside type="tip">
+  For new code, prefer `CancellationToken` over `GrainCancellationToken`. The standard token integrates more naturally with .NET APIs and ASP.NET Core request cancellation.
+</Aside>
+
+## Timeout-Based Cancellation
+
+You can configure automatic timeouts for grain calls at the silo level:
+
+```csharp
+siloBuilder.Configure<MessagingOptions>(options =>
+{
+    options.ResponseTimeout = TimeSpan.FromSeconds(30);
+});
+```
+
+When a response timeout expires, the caller receives a `TimeoutException`. The grain method may still be running — cancellation is cooperative, so the grain only stops if it checks the cancellation token.
+
+## Cancellation Across Grain Chains
+
+Cancellation propagates through chains of grain calls. If Grain A calls Grain B with a cancellation token, and the token is cancelled, both grains observe the cancellation:
+
+```csharp
+public class OrchestratorGrain : Grain, IOrchestratorGrain
+{
+    public async Task RunPipeline(CancellationToken cancellationToken)
+    {
+        var step1 = GrainFactory.GetGrain<IStep1Grain>(0);
+        await step1.Execute(cancellationToken);
+
+        // If cancelled before this point, the next call is never made
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var step2 = GrainFactory.GetGrain<IStep2Grain>(0);
+        await step2.Execute(cancellationToken);
+    }
+}
+```
+
+## Best Practices
+
+- **Always check the token** in loops and before expensive operations.
+- **Pass tokens to async APIs** — most .NET APIs accept `CancellationToken` (I/O, HTTP, database calls).
+- **Don't swallow `OperationCanceledException`** — let it propagate so callers know the operation was cancelled.
+- **Use timeouts** for external-facing operations to prevent indefinite waits.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Request Context" icon="add-document">
+    Flow metadata like trace IDs across grain calls automatically.
+    [Learn more](/features/request-context/)
+  </Card>
+  <Card title="Request/Response & One-Way" icon="document">
+    Understand the messaging patterns available in Orleans.
+    [Learn more](/features/request-response-and-one-way/)
+  </Card>
+  <Card title="Reentrancy & Request Scheduling" icon="random">
+    Control concurrency and interleaving in grain methods.
+    [Learn more](/features/reentrancy-and-request-scheduling/)
+  </Card>
+  <Card title="Grain Call Filters" icon="random">
+    Intercept grain calls for logging, authorization, and telemetry.
+    [Learn more](/features/grain-call-filters/)
+  </Card>
+</CardGrid>

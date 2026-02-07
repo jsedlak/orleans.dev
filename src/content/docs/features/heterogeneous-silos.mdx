@@ -1,0 +1,151 @@
+---
+title: Heterogeneous Silos
+description: Run different grain types on different silos within the same Orleans cluster to tailor hardware and resources to specific workloads.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Heterogeneous silos** allow you to run different grain types on different silos within the same cluster. This lets you tailor hardware, scaling policies, and resource allocation to specific workloads — for example, running CPU-intensive grains on compute-optimized nodes while running memory-heavy grains on memory-optimized nodes.
+
+## How It Works
+
+By default, all silos in an Orleans cluster can host any grain type. With heterogeneous silos, you restrict which grain types each silo supports. The grain placement system automatically routes activations to silos that support the requested grain type.
+
+## Configuring Grain Type Support
+
+Use the `SiloBuilderExtensions` to control which grain types a silo hosts:
+
+```csharp
+// Only host specific grain types on this silo
+siloBuilder.Configure<GrainTypeOptions>(options =>
+{
+    options.Classes.Add(typeof(ImageProcessingGrain));
+    options.Classes.Add(typeof(VideoTranscodingGrain));
+    options.Interfaces.Add(typeof(IImageProcessingGrain));
+    options.Interfaces.Add(typeof(IVideoTranscodingGrain));
+});
+```
+
+Alternatively, use assembly-level filtering to include or exclude entire assemblies:
+
+```csharp
+siloBuilder.Configure<GrainClassOptions>(options =>
+{
+    options.ExcludedGrainTypes.Add(typeof(HeavyProcessingGrain).FullName!);
+});
+```
+
+## Deployment Patterns
+
+### Workload-Based Separation
+
+Separate silos by workload characteristics:
+
+```csharp
+// compute-silo/Program.cs — runs on compute-optimized VMs
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.Configure<SiloOptions>(options =>
+    {
+        options.SiloName = "compute-silo";
+    });
+    // Only host CPU-intensive grain types
+});
+
+// memory-silo/Program.cs — runs on memory-optimized VMs
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.Configure<SiloOptions>(options =>
+    {
+        options.SiloName = "memory-silo";
+    });
+    // Only host memory-intensive grain types
+});
+```
+
+### Feature-Based Separation
+
+Separate silos by application features:
+
+```
+Cluster
+├── API Silos        → Host API gateway grains
+├── Processing Silos → Host background processing grains
+└── Analytics Silos  → Host analytics and reporting grains
+```
+
+<Aside type="tip">
+  All silos in a heterogeneous cluster must reference all grain interfaces. Only the grain implementations need to be selectively deployed. This ensures any silo can create references to any grain type.
+</Aside>
+
+## Important Considerations
+
+- **All silos share one cluster** — heterogeneous silos participate in the same cluster, share the same membership table, and use the same ClusterId/ServiceId.
+- **Placement awareness** — the [placement subsystem](/features/grain-placement-strategies/) automatically routes grain activations to compatible silos.
+- **Reminder configuration** — if you use [reminders](/features/timers-and-reminders/), all silos must include the reminder storage configuration, even if they don't host reminder-using grains.
+- **Interface availability** — all grain interfaces must be available on all silos for routing to work correctly.
+
+<Aside type="caution">
+  If no silo in the cluster supports a requested grain type, the call will fail. Ensure at least one silo is running for each grain type your application uses.
+</Aside>
+
+## Scaling Heterogeneous Silos
+
+Each silo type can be scaled independently. In Kubernetes, use separate Deployments with different resource requests:
+
+```yaml
+# compute-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orleans-compute
+spec:
+  replicas: 5
+  template:
+    spec:
+      containers:
+        - name: silo
+          image: myapp/compute-silo:latest
+          resources:
+            requests:
+              cpu: "4"
+              memory: "2Gi"
+---
+# memory-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orleans-memory
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: silo
+          image: myapp/memory-silo:latest
+          resources:
+            requests:
+              cpu: "1"
+              memory: "16Gi"
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Silo Clustering" icon="puzzle">
+    Learn how silos form a cluster and detect failures.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Grain Placement Strategies" icon="random">
+    Control where grains are activated in the cluster.
+    [Learn more](/features/grain-placement-strategies/)
+  </Card>
+  <Card title="Kubernetes Hosting" icon="puzzle">
+    Deploy Orleans clusters on Kubernetes with automatic management.
+    [Learn more](/features/kubernetes-hosting/)
+  </Card>
+  <Card title="Load Shedding" icon="setting">
+    Protect the cluster from overload.
+    [Learn more](/features/load-shedding/)
+  </Card>
+</CardGrid>

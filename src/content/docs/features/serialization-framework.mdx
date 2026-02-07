@@ -1,0 +1,225 @@
+---
+title: Serialization Framework
+description: High-performance, version-tolerant serialization using [GenerateSerializer] and [Id(n)] attributes in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans includes a high-performance **serialization framework** that handles all data transmission between grains, silos, and clients. It uses compile-time source generators to produce efficient serializers that faithfully represent .NET generics, polymorphism, object identity, and cyclic graphs.
+
+## How It Works
+
+Orleans serialization is built on two attributes:
+
+- `[GenerateSerializer]` — applied to a type to tell Orleans to generate a serializer for it.
+- `[Id(n)]` — applied to each field or property to assign a stable numeric identifier used for version-tolerant serialization.
+
+```csharp
+[GenerateSerializer]
+public class PlayerState
+{
+    [Id(0)]
+    public string Name { get; set; } = "";
+
+    [Id(1)]
+    public int Score { get; set; }
+
+    [Id(2)]
+    public List<string> Achievements { get; set; } = [];
+}
+```
+
+At build time, a C# source generator produces a serializer class that reads and writes each member efficiently. No reflection is used at runtime.
+
+## Why [Id(n)] Matters
+
+The `[Id(n)]` attribute assigns a stable wire-format identifier to each member. This enables **version tolerance**:
+
+- **Adding fields** — add new members with new IDs. Old data that doesn't include them deserializes with default values.
+- **Removing fields** — remove members. Old data with those IDs is silently skipped during deserialization.
+- **Reordering** — IDs are independent of declaration order. You can rearrange members freely.
+- **Renaming** — you can rename properties as long as the ID stays the same.
+
+```csharp
+// V1
+[GenerateSerializer]
+public class PlayerState
+{
+    [Id(0)] public string Name { get; set; } = "";
+    [Id(1)] public int Score { get; set; }
+}
+
+// V2 — added Level, removed nothing, renamed nothing
+[GenerateSerializer]
+public class PlayerState
+{
+    [Id(0)] public string Name { get; set; } = "";
+    [Id(1)] public int Score { get; set; }
+    [Id(2)] public int Level { get; set; } // New field
+}
+```
+
+<Aside type="caution">
+  Never reuse an `[Id(n)]` value for a different member. Once an ID is assigned, it should remain stable forever to preserve compatibility with persisted or in-flight data.
+</Aside>
+
+## Supported Types
+
+Orleans serialization handles most .NET types out of the box:
+
+| Category | Examples |
+|---|---|
+| Primitives | `int`, `long`, `double`, `bool`, `string`, `Guid`, `DateTime` |
+| Collections | `List<T>`, `Dictionary<K,V>`, `HashSet<T>`, arrays |
+| Nullable | `int?`, `string?` |
+| Records | `record class`, `record struct` |
+| Enums | Any enum type |
+| Tuples | `(int, string)`, `Tuple<T1, T2>` |
+| Custom types | Types marked with `[GenerateSerializer]` |
+
+### Records
+
+Records work with `[GenerateSerializer]`. Apply `[Id(n)]` on constructor parameters:
+
+```csharp
+[GenerateSerializer]
+public record PlayerInfo(
+    [property: Id(0)] string Name,
+    [property: Id(1)] int Score);
+```
+
+### Generics
+
+Generic types are fully supported:
+
+```csharp
+[GenerateSerializer]
+public class Envelope<T>
+{
+    [Id(0)]
+    public T Payload { get; set; } = default!;
+
+    [Id(1)]
+    public DateTime Timestamp { get; set; }
+}
+```
+
+### Polymorphism
+
+Serialization preserves the actual runtime type of objects. If a field is declared as a base type, the concrete type is serialized and deserialized correctly:
+
+```csharp
+[GenerateSerializer]
+public abstract class Shape
+{
+    [Id(0)]
+    public string Color { get; set; } = "";
+}
+
+[GenerateSerializer]
+public class Circle : Shape
+{
+    [Id(0)]
+    public double Radius { get; set; }
+}
+
+[GenerateSerializer]
+public class Rectangle : Shape
+{
+    [Id(0)]
+    public double Width { get; set; }
+
+    [Id(1)]
+    public double Height { get; set; }
+}
+```
+
+<Aside type="tip">
+  Each type in an inheritance hierarchy has its own independent ID space. `Circle`'s `[Id(0)]` for `Radius` doesn't conflict with `Shape`'s `[Id(0)]` for `Color`.
+</Aside>
+
+## Object Identity and Cycles
+
+Orleans serialization preserves **object identity** — if two fields reference the same object, that relationship is maintained after deserialization. Cyclic object graphs are also handled correctly.
+
+```csharp
+[GenerateSerializer]
+public class Node
+{
+    [Id(0)]
+    public string Value { get; set; } = "";
+
+    [Id(1)]
+    public Node? Next { get; set; }
+}
+
+// Circular reference: a -> b -> a
+var a = new Node { Value = "A" };
+var b = new Node { Value = "B" };
+a.Next = b;
+b.Next = a; // Cycle — handled correctly
+```
+
+## Immutable Types
+
+For types that are known to be immutable, use `[Immutable]` to skip deep-copying during grain method dispatch:
+
+```csharp
+[Immutable]
+[GenerateSerializer]
+public record ProductInfo(
+    [property: Id(0)] string Name,
+    [property: Id(1)] decimal Price);
+```
+
+See [Immutability Optimization](/features/immutability-optimization/) for details.
+
+## Surrogates for External Types
+
+To serialize types you don't control (third-party library types), use **surrogates**:
+
+```csharp
+[GenerateSerializer]
+public struct DateTimeOffsetSurrogate
+{
+    [Id(0)]
+    public long Ticks;
+
+    [Id(1)]
+    public short OffsetMinutes;
+}
+
+[RegisterConverter]
+public sealed class DateTimeOffsetConverter :
+    IConverter<DateTimeOffset, DateTimeOffsetSurrogate>
+{
+    public DateTimeOffset ConvertFromSurrogate(
+        in DateTimeOffsetSurrogate surrogate) =>
+        new(surrogate.Ticks, TimeSpan.FromMinutes(surrogate.OffsetMinutes));
+
+    public DateTimeOffsetSurrogate ConvertToSurrogate(
+        in DateTimeOffset value) =>
+        new() { Ticks = value.Ticks, OffsetMinutes = (short)value.Offset.TotalMinutes };
+}
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Code Generation" icon="setting">
+    Learn how Orleans source generators produce serializers, grain references, and more.
+    [Learn more](/features/code-generation/)
+  </Card>
+  <Card title="Immutability Optimization" icon="rocket">
+    Skip deep-copying for immutable types to reduce overhead.
+    [Learn more](/features/immutability-optimization/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Persist serialized grain state to durable storage.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="Grain Interface Versioning" icon="setting">
+    Version-tolerant serialization for rolling upgrades.
+    [Learn more](/features/grain-interface-versioning/)
+  </Card>
+</CardGrid>

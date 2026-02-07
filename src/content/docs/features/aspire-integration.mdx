@@ -1,0 +1,199 @@
+---
+title: .NET Aspire Integration
+description: First-class Aspire resource support with automatic ClusterId, ServiceId, endpoint configuration, service discovery, and health checks.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans has **first-class .NET Aspire integration** that simplifies local development and production deployment. The Aspire hosting package provides an Orleans resource that automatically configures clustering, persistence, reminders, streaming, and grain directory providers — all through a declarative AppHost model.
+
+## Setup
+
+### Install AppHost Package
+
+In your Aspire **AppHost** project:
+
+```bash
+dotnet add package Aspire.Hosting.Orleans
+```
+
+### Configure in AppHost
+
+```csharp
+var builder = DistributedApplication.CreateBuilder(args);
+
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainStorage("Default", redis);
+
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WaitFor(redis);
+
+builder.Build().Run();
+```
+
+### Silo Project
+
+In the silo project, add the Aspire client integration:
+
+```bash
+dotnet add package Aspire.Hosting.Orleans
+```
+
+The silo picks up the Orleans configuration from Aspire automatically:
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.AddServiceDefaults();
+builder.AddKeyedRedisClient("redis");
+
+builder.UseOrleans();
+
+var app = builder.Build();
+// ... map endpoints
+app.Run();
+```
+
+<Aside type="tip">
+  With Aspire, you don't need to manually configure `ClusterId`, `ServiceId`, endpoints, or provider connection strings in the silo code. Aspire handles all of this through the AppHost configuration.
+</Aside>
+
+## What Aspire Configures Automatically
+
+| Setting | How Aspire Sets It |
+|---|---|
+| `ClusterId` | Derived from the Orleans resource name |
+| `ServiceId` | Derived from the Orleans resource name |
+| Silo endpoints | Auto-configured from service discovery |
+| Clustering provider | Configured via `WithClustering()` |
+| Grain storage | Configured via `WithGrainStorage()` |
+| Reminder storage | Configured via `WithReminders()` |
+| Grain directory | Configured via `WithGrainDirectory()` |
+| Streaming provider | Configured via `WithStreaming()` |
+
+## Configuration Methods
+
+### Clustering
+
+```csharp
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis);
+```
+
+### Grain Storage
+
+Named storage providers with different backends:
+
+```csharp
+var redis = builder.AddRedis("redis");
+var cosmos = builder.AddAzureCosmosDB("cosmos");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainStorage("Default", redis)
+    .WithGrainStorage("Archive", cosmos);
+```
+
+### Reminders
+
+```csharp
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithReminders(redis);
+```
+
+### Grain Directory
+
+```csharp
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainDirectory("default", redis);
+```
+
+### Streaming
+
+```csharp
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithStreaming("StreamProvider", redis);
+```
+
+## Multi-Silo Setup
+
+Aspire supports multiple silo replicas:
+
+```csharp
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis);
+
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WithReplicas(3)  // Run 3 silo instances
+    .WaitFor(redis);
+```
+
+## Separate Client and Silo
+
+If your client (e.g., web API) is a separate project from the silo:
+
+```csharp
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis);
+
+// Silo project
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WaitFor(redis);
+
+// Client project (web API)
+builder.AddProject<Projects.MyApp_Api>("api")
+    .WithReference(orleans.AsClient())  // Connect as client, not silo
+    .WaitFor(redis);
+```
+
+<Aside>
+  `AsClient()` configures the project as an Orleans client that connects to the cluster but does not host grains. Use this for API frontends that need to call grains.
+</Aside>
+
+## Health Checks
+
+Aspire automatically configures health checks for Orleans. The silo reports its health status through the Aspire dashboard:
+
+- **Starting** — silo is joining the cluster.
+- **Healthy** — silo is active and processing messages.
+- **Degraded** — silo is experiencing issues but still operating.
+- **Unhealthy** — silo has failed and needs attention.
+
+## Local Development
+
+The Aspire dashboard (`http://localhost:15888` by default) provides:
+
+- **Resource status** — see all silos and their dependencies.
+- **Logs** — aggregated logs from all silo instances.
+- **Traces** — distributed traces across grain calls.
+- **Metrics** — runtime metrics from Orleans silos.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="ASP.NET Core Co-Hosting" icon="puzzle">
+    Learn about co-hosting Orleans with ASP.NET Core.
+    [Learn more](/features/aspnet-core-co-hosting/)
+  </Card>
+  <Card title="Getting Started" icon="rocket">
+    Build your first Orleans app with Aspire.
+    [Get started](/guides/getting-started/)
+  </Card>
+  <Card title="Silo Clustering" icon="puzzle">
+    Understand the clustering that Aspire configures.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Kubernetes Hosting" icon="puzzle">
+    Deploy Aspire-configured apps to Kubernetes.
+    [Learn more](/features/kubernetes-hosting/)
+  </Card>
+</CardGrid>

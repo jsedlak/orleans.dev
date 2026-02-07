@@ -1,0 +1,150 @@
+---
+title: Request Context
+description: Flow application metadata — trace IDs, correlation tokens, and custom values — automatically across grain calls.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Request context** lets you attach metadata to the current request that flows automatically across grain calls, even across silo boundaries. This is useful for propagating trace IDs, correlation tokens, authentication claims, tenant identifiers, and other cross-cutting data without passing them as method parameters.
+
+## How It Works
+
+`RequestContext` uses async-local storage to maintain a set of key-value pairs that are serialized and transmitted with every grain call originating from the current context. When Grain A calls Grain B, any values set in the request context on Grain A are available on Grain B.
+
+## Setting and Reading Values
+
+```csharp
+// Set a value before calling a grain
+RequestContext.Set("CorrelationId", Guid.NewGuid().ToString());
+RequestContext.Set("TenantId", "contoso");
+
+// The values are now available in any grain called from this context
+var grain = grains.GetGrain<IOrderGrain>(orderId);
+await grain.PlaceOrder(request);
+```
+
+Inside the grain:
+
+```csharp
+public class OrderGrain : Grain, IOrderGrain
+{
+    public async ValueTask PlaceOrder(OrderRequest request)
+    {
+        var correlationId = RequestContext.Get("CorrelationId") as string;
+        var tenantId = RequestContext.Get("TenantId") as string;
+
+        _logger.LogInformation(
+            "Processing order. CorrelationId={CorrelationId}, Tenant={Tenant}",
+            correlationId, tenantId);
+
+        // These values propagate to downstream grain calls automatically
+        var inventory = GrainFactory.GetGrain<IInventoryGrain>(request.ProductId);
+        await inventory.Reserve(request.Quantity);
+        // InventoryGrain also sees CorrelationId and TenantId
+    }
+}
+```
+
+## API Reference
+
+| Method | Description |
+|---|---|
+| `RequestContext.Set(key, value)` | Sets a value in the current request context. The value must be serializable. |
+| `RequestContext.Get(key)` | Gets a value from the current request context. Returns `null` if not set. |
+| `RequestContext.Remove(key)` | Removes a value from the current request context. |
+| `RequestContext.Clear()` | Removes all values from the current request context. |
+
+<Aside type="tip">
+  Values stored in `RequestContext` must be serializable by the Orleans serializer. Primitive types, strings, and types marked with `[GenerateSerializer]` work out of the box.
+</Aside>
+
+## Common Use Cases
+
+### Distributed Tracing Correlation
+
+Propagate a trace ID from an HTTP request through all grain calls:
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var traceId = context.Request.Headers["X-Trace-Id"].FirstOrDefault()
+        ?? Guid.NewGuid().ToString();
+
+    RequestContext.Set("TraceId", traceId);
+    await next();
+});
+```
+
+### Multi-Tenant Context
+
+Pass tenant information without adding it to every grain method signature:
+
+```csharp
+public class TenantMiddleware
+{
+    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    {
+        var tenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+        if (tenantId is not null)
+        {
+            RequestContext.Set("TenantId", tenantId);
+        }
+        await next(context);
+    }
+}
+```
+
+### Grain Call Filters
+
+Combine request context with [grain call filters](/features/grain-call-filters/) for cross-cutting logging:
+
+```csharp
+public class LoggingFilter : IIncomingGrainCallFilter
+{
+    private readonly ILogger<LoggingFilter> _logger;
+
+    public LoggingFilter(ILogger<LoggingFilter> logger) => _logger = logger;
+
+    public async Task Invoke(IIncomingGrainCallContext context)
+    {
+        var traceId = RequestContext.Get("TraceId") as string ?? "unknown";
+        using var scope = _logger.BeginScope(
+            new Dictionary<string, object> { ["TraceId"] = traceId });
+
+        _logger.LogInformation("Grain call: {Method}", context.MethodName);
+        await context.Invoke();
+    }
+}
+```
+
+## Important Considerations
+
+- **Request context is per-request** — values set in one request do not leak into other requests.
+- **Values are copied** — each grain call gets a copy of the request context. Modifications in a downstream grain do not propagate back to the caller.
+- **Serialization overhead** — every value in the request context is serialized with each grain call. Keep values small and few.
+- **Not for large data** — use request context for metadata (IDs, tokens, flags), not for large payloads.
+
+<Aside type="caution">
+  Request context values are propagated with every grain call in the chain. Adding large or numerous values increases serialization overhead for all subsequent calls.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Cancellation Tokens" icon="setting">
+    Enable cooperative cancellation of long-running grain operations.
+    [Learn more](/features/cancellation-tokens/)
+  </Card>
+  <Card title="Grain Call Filters" icon="random">
+    Intercept grain calls for authorization, logging, and telemetry.
+    [Learn more](/features/grain-call-filters/)
+  </Card>
+  <Card title="Distributed Tracing" icon="open-book">
+    Full OpenTelemetry integration for distributed tracing of grain calls.
+    [Learn more](/features/distributed-tracing/)
+  </Card>
+  <Card title="Request/Response & One-Way" icon="document">
+    Understand the messaging patterns available in Orleans.
+    [Learn more](/features/request-response-and-one-way/)
+  </Card>
+</CardGrid>

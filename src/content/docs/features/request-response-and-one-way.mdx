@@ -1,0 +1,185 @@
+---
+title: Request/Response & One-Way Messaging
+description: Understand Orleans messaging patterns — strongly-typed async request/response and fire-and-forget one-way messages.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans grains communicate through **strongly-typed, asynchronous messages**. Every grain interface method call becomes a message sent from the caller to the target grain. Orleans supports two messaging patterns: **request/response** (the default) and **one-way** (fire-and-forget).
+
+## Request/Response
+
+The standard messaging pattern. The caller sends a request and asynchronously waits for the response. Exceptions in the target grain propagate back to the caller.
+
+```csharp
+public interface ICalculatorGrain : IGrainWithIntegerKey
+{
+    ValueTask<double> Add(double a, double b);
+    ValueTask<double> Divide(double a, double b);
+}
+
+public class CalculatorGrain : Grain, ICalculatorGrain
+{
+    public ValueTask<double> Add(double a, double b) =>
+        ValueTask.FromResult(a + b);
+
+    public ValueTask<double> Divide(double a, double b)
+    {
+        if (b == 0) throw new DivideByZeroException();
+        return ValueTask.FromResult(a / b);
+    }
+}
+```
+
+Calling the grain:
+
+```csharp
+var calc = grains.GetGrain<ICalculatorGrain>(0);
+
+// Waits for the result
+var sum = await calc.Add(3, 4); // 7.0
+
+// Exception propagates to the caller
+try
+{
+    await calc.Divide(1, 0);
+}
+catch (DivideByZeroException)
+{
+    // Caught here, even though it was thrown on a different silo
+}
+```
+
+### Method Return Types
+
+All grain interface methods must return an async type:
+
+| Return type | Use case |
+|---|---|
+| `Task` | No return value, caller waits for completion |
+| `ValueTask` | No return value, low-allocation alternative to `Task` |
+| `Task<T>` | Returns a value of type `T` |
+| `ValueTask<T>` | Returns a value, low-allocation alternative to `Task<T>` |
+
+<Aside type="tip">
+  Prefer `ValueTask` and `ValueTask<T>` for grain methods that often complete synchronously. This avoids allocating a `Task` object for each call.
+</Aside>
+
+## One-Way Messaging
+
+One-way messages are **fire-and-forget** — the caller sends the message and continues immediately without waiting for the target grain to process it. The caller receives no response and no exception propagation.
+
+Mark a method with the `[OneWay]` attribute:
+
+```csharp
+public interface ILogGrain : IGrainWithStringKey
+{
+    [OneWay]
+    ValueTask LogEvent(string message);
+}
+```
+
+The caller's code looks the same, but the `await` completes as soon as the message is enqueued, not when it's processed:
+
+```csharp
+var logger = grains.GetGrain<ILogGrain>("app");
+await logger.LogEvent("User logged in"); // Returns immediately
+```
+
+<Aside type="caution">
+  With one-way messaging, the caller has no way to know if the target grain processed the message successfully. Use this pattern only when you don't need delivery confirmation or error handling at the call site.
+</Aside>
+
+### When to Use One-Way
+
+- **Logging and telemetry** — fire-and-forget events that shouldn't block the caller.
+- **Notifications** — informing other grains about events without needing acknowledgement.
+- **Performance-sensitive paths** — eliminating round-trip latency when the response isn't needed.
+- **Observer callbacks** — observer methods are typically one-way.
+
+## Grain-to-Grain Communication
+
+Grains call other grains using the same pattern. Use `GrainFactory` to obtain a reference:
+
+```csharp
+public class OrderGrain : Grain, IOrderGrain
+{
+    public async ValueTask<OrderConfirmation> PlaceOrder(OrderRequest request)
+    {
+        // Request/response call to another grain
+        var inventory = GrainFactory.GetGrain<IInventoryGrain>(request.ProductId);
+        var reserved = await inventory.Reserve(request.Quantity);
+
+        if (!reserved)
+            throw new InvalidOperationException("Insufficient stock");
+
+        // One-way notification
+        var notifications = GrainFactory.GetGrain<INotificationGrain>(request.CustomerId);
+        await notifications.SendOrderConfirmation(request.OrderId);
+
+        return new OrderConfirmation { OrderId = request.OrderId, Status = "Confirmed" };
+    }
+}
+```
+
+## External Client Communication
+
+External clients (ASP.NET Core apps, console apps, etc.) communicate with grains through `IClusterClient`, which provides `IGrainFactory`:
+
+```csharp
+// In an ASP.NET Core app, IGrainFactory is injected via DI
+app.MapPost("/orders", async (IGrainFactory grains, OrderRequest request) =>
+{
+    var order = grains.GetGrain<IOrderGrain>(request.OrderId);
+    var confirmation = await order.PlaceOrder(request);
+    return Results.Ok(confirmation);
+});
+```
+
+## Error Handling
+
+For request/response calls, exceptions propagate across grain boundaries:
+
+- **Application exceptions** thrown in the grain method are serialized and re-thrown on the caller.
+- **System exceptions** (like timeouts) are wrapped in `OrleansException`.
+- The full exception type, message, and stack trace are preserved when possible.
+
+```csharp
+try
+{
+    await grain.SomeMethod();
+}
+catch (InvalidOperationException ex)
+{
+    // Application exception from the grain
+}
+catch (TimeoutException ex)
+{
+    // The grain didn't respond in time
+}
+catch (OrleansException ex)
+{
+    // System-level Orleans error
+}
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Request Context" icon="add-document">
+    Flow metadata like trace IDs and correlation tokens across grain calls.
+    [Learn more](/features/request-context/)
+  </Card>
+  <Card title="Cancellation Tokens" icon="setting">
+    Enable cooperative cancellation of long-running grain operations.
+    [Learn more](/features/cancellation-tokens/)
+  </Card>
+  <Card title="Turn-Based Concurrency" icon="random">
+    Understand how grains process messages one at a time.
+    [Learn more](/features/turn-based-concurrency/)
+  </Card>
+  <Card title="Observers" icon="open-book">
+    Push notifications from grains to clients without polling.
+    [Learn more](/features/observers/)
+  </Card>
+</CardGrid>

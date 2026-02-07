@@ -1,0 +1,184 @@
+---
+title: Turn-Based Concurrency
+description: Understand how Orleans grains process messages one at a time, eliminating concurrency bugs without explicit locks.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans grains use a **turn-based concurrency** model: each grain processes one message (or "turn") at a time. While a grain is executing a method, no other messages are delivered to it. This eliminates entire classes of concurrency bugs — no locks, no race conditions, no deadlocks within a single grain.
+
+## How It Works
+
+When a grain method is called:
+
+1. The message enters the grain's **message queue**.
+2. If the grain is idle, it begins processing the message immediately.
+3. If the grain is already processing a message, the new message waits in the queue.
+4. When the current method completes (the `Task` or `ValueTask` finishes), the next message in the queue is dispatched.
+
+```csharp
+public class BankAccountGrain : Grain, IBankAccountGrain
+{
+    private decimal _balance;
+
+    public ValueTask<decimal> GetBalance() =>
+        ValueTask.FromResult(_balance);
+
+    public ValueTask Deposit(decimal amount)
+    {
+        // Safe — no other method can run on this grain concurrently
+        _balance += amount;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<bool> Withdraw(decimal amount)
+    {
+        // No race condition — single-threaded guarantee
+        if (_balance >= amount)
+        {
+            _balance -= amount;
+            return ValueTask.FromResult(true);
+        }
+        return ValueTask.FromResult(false);
+    }
+}
+```
+
+<Aside type="tip">
+  Even though grain methods are `async`, Orleans guarantees that **only one turn runs at a time** per activation. Between `await` points within the same method, the grain is idle and can process other messages — but only if reentrancy is enabled.
+</Aside>
+
+## Awaits and Interleaving
+
+By default, when a grain method hits an `await`, the grain **does not** process other messages while waiting. The turn is considered "in progress" until the entire method completes.
+
+```csharp
+public async Task TransferTo(IBankAccountGrain target, decimal amount)
+{
+    _balance -= amount;
+    // While awaiting this call, NO other messages are processed
+    // on this grain (default behavior)
+    await target.Deposit(amount);
+    // Still in the same turn
+}
+```
+
+This means a grain can safely read and modify its state across `await` points without worrying about interleaving. However, it also means that a grain waiting on an external call blocks its entire message queue.
+
+## Enabling Reentrancy
+
+Sometimes you want to allow other messages to be processed while a grain is awaiting an external call. Orleans provides several reentrancy options via the [Reentrancy & Request Scheduling](/features/reentrancy-and-request-scheduling/) feature.
+
+### Grain-Level Reentrancy
+
+Mark the entire grain as reentrant to allow interleaving at every `await`:
+
+```csharp
+[Reentrant]
+public class CacheGrain : Grain, ICacheGrain
+{
+    private readonly Dictionary<string, string> _cache = new();
+
+    public async ValueTask<string> GetOrLoad(string key)
+    {
+        if (_cache.TryGetValue(key, out var value))
+            return value;
+
+        // Other messages CAN interleave here
+        value = await LoadFromSourceAsync(key);
+
+        // Must re-check — state may have changed during the await
+        _cache.TryAdd(key, value);
+        return _cache[key];
+    }
+}
+```
+
+<Aside type="caution">
+  With `[Reentrant]`, you must treat every `await` as a point where state may change. Always re-validate state after awaiting, just like you would in multithreaded code.
+</Aside>
+
+### Method-Level Interleaving
+
+Allow specific methods to interleave without making the whole grain reentrant:
+
+```csharp
+public interface IInventoryGrain : IGrainWithStringKey
+{
+    [AlwaysInterleave]
+    ValueTask<int> GetStock();
+
+    ValueTask<bool> Reserve(int quantity);
+}
+```
+
+Methods marked `[AlwaysInterleave]` can be dispatched even while the grain is in the middle of processing another request. Read-only methods are common candidates.
+
+### Read-Only Methods
+
+The `[ReadOnly]` attribute is a semantic hint that a method does not modify grain state. Read-only calls can be optimized by the runtime and may interleave with each other:
+
+```csharp
+public interface IProductGrain : IGrainWithStringKey
+{
+    [ReadOnly]
+    ValueTask<ProductInfo> GetInfo();
+
+    ValueTask UpdatePrice(decimal price);
+}
+```
+
+## Deadlock Prevention
+
+Turn-based concurrency can lead to deadlocks if two grains call each other synchronously in a cycle. Orleans detects and breaks these deadlocks through call chain reentrancy:
+
+```csharp
+// GrainA calls GrainB
+public async Task DoWork()
+{
+    var b = GrainFactory.GetGrain<IGrainB>(0);
+    await b.SomeMethod(); // GrainA is now waiting
+}
+
+// GrainB calls back to GrainA in the same call chain
+public async Task SomeMethod()
+{
+    var a = GrainFactory.GetGrain<IGrainA>(0);
+    // Without reentrancy, this would deadlock.
+    // Orleans allows this callback by default for the same call chain.
+    await a.Callback();
+}
+```
+
+<Aside>
+  Orleans automatically enables **call-chain reentrancy** — if GrainA calls GrainB, and GrainB calls back to GrainA as part of the same request chain, the callback is allowed through. This prevents the most common deadlock scenario.
+</Aside>
+
+## Best Practices
+
+- **Keep grains focused** — small grains with minimal state process messages faster and reduce contention.
+- **Avoid long-running synchronous work** — it blocks the grain's message queue and increases latency for other callers.
+- **Use `[ReadOnly]` for query methods** — enables the runtime to optimize read-only calls.
+- **Be cautious with `[Reentrant]`** — only use it when you understand the implications of interleaved state access.
+- **Prefer fire-and-forget for notifications** — use [one-way messages](/features/request-response-and-one-way/) when you don't need a response, reducing the chance of call chains that could deadlock.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Reentrancy & Request Scheduling" icon="random">
+    Fine-grained control over concurrency with `[Reentrant]`, `[AlwaysInterleave]`, `[ReadOnly]`, and more.
+    [Learn more](/features/reentrancy-and-request-scheduling/)
+  </Card>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of defining and calling grains.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="ACID Transactions" icon="pencil">
+    Coordinate multi-grain operations with distributed transactions.
+    [Learn more](/features/acid-transactions/)
+  </Card>
+  <Card title="Grain Identity & Lifecycle" icon="setting">
+    Understand grain identities and how the runtime manages activation.
+    [Learn more](/features/grain-identity-and-lifecycle/)
+  </Card>
+</CardGrid>

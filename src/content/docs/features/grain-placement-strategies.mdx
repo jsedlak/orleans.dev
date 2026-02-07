@@ -1,0 +1,178 @@
+---
+title: Grain Placement Strategies
+description: Control where grains are activated in the cluster — random, local, hash-based, resource-optimized, or custom placement strategies.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Grain placement strategies** control which silo in the cluster activates a grain when it's first called. The default strategy distributes grains randomly, but Orleans provides several built-in strategies and supports custom implementations for specialized requirements.
+
+## Built-in Strategies
+
+### RandomPlacement (Default)
+
+Activates grains on a randomly selected compatible silo. Provides good distribution across the cluster with minimal overhead.
+
+```csharp
+[RandomPlacement]
+public class DefaultGrain : Grain, IDefaultGrain { }
+```
+
+This is the default — you don't need the attribute unless overriding a different default.
+
+### PreferLocalPlacement
+
+Activates the grain on the same silo as the caller if possible. Falls back to random placement for the first activation or when the calling silo can't host the grain.
+
+```csharp
+[PreferLocalPlacement]
+public class LocalGrain : Grain, ILocalGrain { }
+```
+
+Best for grains that are always called from a specific silo, like grains created by [stateless workers](/features/stateless-worker-grains/) or web API endpoints.
+
+### HashBasedPlacement
+
+Uses a deterministic hash of the grain identity to assign a silo. The same grain identity always maps to the same silo (as long as the cluster topology doesn't change).
+
+```csharp
+[HashBasedPlacement]
+public class PartitionedGrain : Grain, IPartitionedGrain { }
+```
+
+Useful for co-locating related grains on the same silo.
+
+### ActivationCountBasedPlacement
+
+Activates grains on the silo with the fewest current activations, balancing load across the cluster.
+
+```csharp
+[ActivationCountBasedPlacement]
+public class BalancedGrain : Grain, IBalancedGrain { }
+```
+
+Good for workloads where even distribution of activations is important.
+
+### ResourceOptimizedPlacement
+
+Uses CPU and memory utilization metrics to place grains on the least-loaded silo. More sophisticated than activation count alone.
+
+```csharp
+[ResourceOptimizedPlacement]
+public class HeavyGrain : Grain, IHeavyGrain { }
+```
+
+<Aside type="tip">
+  `ResourceOptimizedPlacement` requires that silos collect and share resource utilization statistics. This is enabled by default in Orleans 8+.
+</Aside>
+
+### SiloRoleBasedPlacement
+
+Places grains on silos with a specific role, enabling [heterogeneous silo](/features/heterogeneous-silos/) deployments:
+
+```csharp
+[SiloRoleBasedPlacement]
+public class WorkerGrain : Grain, IWorkerGrain { }
+```
+
+## Strategy Comparison
+
+| Strategy | Distribution | Locality | Load Awareness | Deterministic |
+|---|---|---|---|---|
+| Random | Even (statistical) | No | No | No |
+| PreferLocal | Biased to caller | Yes | No | No |
+| HashBased | Even (deterministic) | No | No | Yes |
+| ActivationCount | Even (dynamic) | No | Activation count | No |
+| ResourceOptimized | Even (dynamic) | No | CPU + memory | No |
+
+## Custom Placement Strategy
+
+Implement a custom strategy for application-specific placement logic.
+
+### 1. Define the Strategy Attribute
+
+```csharp
+[AttributeUsage(AttributeTargets.Class)]
+public class RegionPlacementAttribute : PlacementAttribute
+{
+    public RegionPlacementAttribute() : base(new RegionPlacementStrategy()) { }
+}
+
+[Serializable]
+public class RegionPlacementStrategy : PlacementStrategy { }
+```
+
+### 2. Implement the Director
+
+```csharp
+public class RegionPlacementDirector : IPlacementDirector
+{
+    public Task<SiloAddress> OnAddActivation(
+        PlacementStrategy strategy,
+        PlacementTarget target,
+        IPlacementContext context)
+    {
+        // Get the grain's region from its key
+        var grainId = target.GrainIdentity.PrimaryKeyString;
+        var region = ExtractRegion(grainId);
+
+        // Find a silo in the matching region
+        var compatibleSilos = context.GetCompatibleSilos(target);
+        var regionSilo = compatibleSilos
+            .FirstOrDefault(s => IsInRegion(s, region))
+            ?? compatibleSilos[Random.Shared.Next(compatibleSilos.Length)];
+
+        return Task.FromResult(regionSilo);
+    }
+}
+```
+
+### 3. Register the Director
+
+```csharp
+siloBuilder.ConfigureServices(services =>
+{
+    services.AddPlacementDirector<RegionPlacementStrategy, RegionPlacementDirector>();
+});
+```
+
+### 4. Apply to Grains
+
+```csharp
+[RegionPlacement]
+public class RegionalGrain : Grain, IRegionalGrain { }
+```
+
+## Setting a Default Strategy
+
+Change the default placement strategy for all grains:
+
+```csharp
+siloBuilder.Configure<PlacementStrategyOptions>(options =>
+{
+    options.PlacementStrategy = nameof(ActivationCountBasedPlacement);
+});
+```
+
+Individual grains can still override with their own `[XPlacement]` attribute.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Directory" icon="document">
+    Learn how grain locations are tracked after placement.
+    [Learn more](/features/grain-directory/)
+  </Card>
+  <Card title="Heterogeneous Silos" icon="setting">
+    Run different grain types on different silos.
+    [Learn more](/features/heterogeneous-silos/)
+  </Card>
+  <Card title="Grain Migration" icon="right-arrow">
+    Move grains between silos after initial placement.
+    [Learn more](/features/grain-migration/)
+  </Card>
+  <Card title="Silo Clustering" icon="puzzle">
+    Understand the cluster topology that placement operates on.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+</CardGrid>

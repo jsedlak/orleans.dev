@@ -1,0 +1,183 @@
+---
+title: Reentrancy & Request Scheduling
+description: Fine-grained control over concurrency with [Reentrant], [AlwaysInterleave], [ReadOnly], and [MayInterleave] attributes in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+By default, Orleans grains process one request at a time ([turn-based concurrency](/features/turn-based-concurrency/)). **Reentrancy** and **request scheduling** attributes let you relax this constraint when safe, allowing multiple requests to interleave within a grain for improved throughput.
+
+## Default Behavior
+
+Without any reentrancy configuration, a grain is **non-reentrant**:
+
+- One request runs at a time.
+- When a method hits an `await`, the grain is "paused" but does **not** accept new requests.
+- Other messages queue until the current method fully completes.
+
+This is the safest model — no concurrent access to grain state — but it can limit throughput when grains frequently await external calls.
+
+## Reentrancy Options
+
+### [Reentrant] — Grain-Level
+
+Makes the entire grain reentrant. Any `await` point becomes a potential interleaving point where other queued messages can begin processing:
+
+```csharp
+[Reentrant]
+public class CacheGrain : Grain, ICacheGrain
+{
+    private readonly Dictionary<string, byte[]> _cache = new();
+
+    public async ValueTask<byte[]?> Get(string key)
+    {
+        if (_cache.TryGetValue(key, out var value))
+            return value;
+
+        // Other requests may interleave here
+        value = await FetchFromStorageAsync(key);
+
+        // Must re-check — another request may have populated the cache
+        _cache.TryAdd(key, value);
+        return _cache[key];
+    }
+}
+```
+
+<Aside type="caution">
+  With `[Reentrant]`, you must assume grain state can change across any `await`. Always re-validate state after awaiting. This is similar to writing concurrent code with locks in traditional multithreading.
+</Aside>
+
+### [AlwaysInterleave] — Method-Level
+
+Allows a specific method to interleave with any other request, even on a non-reentrant grain:
+
+```csharp
+public interface IInventoryGrain : IGrainWithStringKey
+{
+    [AlwaysInterleave]
+    ValueTask<int> GetStock();       // Can run while other methods are awaiting
+
+    ValueTask<bool> Reserve(int qty); // Follows normal non-reentrant scheduling
+}
+```
+
+Use `[AlwaysInterleave]` for methods that are safe to run concurrently — typically read-only queries that don't modify state.
+
+### [ReadOnly] — Semantic Hint
+
+Marks a method as read-only. Read-only requests may interleave with each other (but not with non-read-only requests):
+
+```csharp
+public interface IProductGrain : IGrainWithStringKey
+{
+    [ReadOnly]
+    ValueTask<ProductInfo> GetInfo();
+
+    [ReadOnly]
+    ValueTask<decimal> GetPrice();
+
+    ValueTask UpdatePrice(decimal newPrice);
+}
+```
+
+Multiple `GetInfo` and `GetPrice` calls can execute concurrently, but `UpdatePrice` waits for exclusive access.
+
+### [MayInterleave] — Conditional
+
+Allows custom logic to decide at runtime whether a request should interleave:
+
+```csharp
+[MayInterleave(nameof(ArgHasNoSideEffects))]
+public class SmartGrain : Grain, ISmartGrain
+{
+    public static bool ArgHasNoSideEffects(IInvokable req)
+    {
+        // Allow interleaving for methods with a specific attribute
+        return req.GetMethodName() == nameof(GetStatus);
+    }
+
+    public ValueTask<string> GetStatus() => ValueTask.FromResult("OK");
+
+    public async ValueTask DoWork()
+    {
+        // Non-interleaving work
+        await Task.Delay(1000);
+    }
+}
+```
+
+The predicate method must be `static` and return `bool`.
+
+## Call Chain Reentrancy
+
+Orleans automatically supports **call chain reentrancy** to prevent deadlocks. If Grain A calls Grain B, and Grain B calls back to Grain A as part of the same request chain, the callback is allowed through even on non-reentrant grains.
+
+```csharp
+// This works without deadlock:
+// GrainA.Start() -> GrainB.Process() -> GrainA.GetData()
+```
+
+You can control this behavior:
+
+```csharp
+siloBuilder.Configure<SchedulingOptions>(options =>
+{
+    // Default: enabled (prevents deadlocks)
+    options.AllowCallChainReentrancy = true;
+});
+```
+
+### Request Scoping
+
+For advanced scenarios, you can create reentrancy scopes using `RequestContext`:
+
+```csharp
+public async Task ScopedWork()
+{
+    // Create a reentrancy scope — callbacks within this scope are allowed
+    using var scope = RequestContext.SuppressCallChainReentrancy();
+    await SomeExternalGrainCall();
+}
+```
+
+## Scheduling Priority
+
+When multiple messages are queued, Orleans processes them in FIFO order by default. The scheduling system respects the reentrancy attributes to determine which messages can interleave.
+
+| Attribute | Scope | Interleaving |
+|---|---|---|
+| (none) | Grain | No interleaving — strict FIFO |
+| `[Reentrant]` | Grain | All requests can interleave at `await` points |
+| `[AlwaysInterleave]` | Method | This method always interleaves |
+| `[ReadOnly]` | Method | Read-only methods interleave with each other |
+| `[MayInterleave]` | Grain | Custom predicate decides per request |
+
+## Best Practices
+
+- **Default to non-reentrant** — only opt in to reentrancy when you have a clear performance need and understand the implications.
+- **Use `[ReadOnly]` for queries** — safe and easy to reason about.
+- **Use `[AlwaysInterleave]` sparingly** — only for methods that are truly independent of grain state.
+- **Never assume state is unchanged after an `await`** in reentrant grains.
+- **Prefer `[ReadOnly]` over `[Reentrant]`** — it provides partial interleaving without the full complexity.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Turn-Based Concurrency" icon="random">
+    Understand the default single-threaded execution model.
+    [Learn more](/features/turn-based-concurrency/)
+  </Card>
+  <Card title="ACID Transactions" icon="pencil">
+    Use transactions for coordinated multi-grain operations.
+    [Learn more](/features/acid-transactions/)
+  </Card>
+  <Card title="Load Shedding" icon="setting">
+    Protect the cluster from overload when throughput is critical.
+    [Learn more](/features/load-shedding/)
+  </Card>
+  <Card title="Grain Call Filters" icon="random">
+    Intercept grain calls for cross-cutting concerns.
+    [Learn more](/features/grain-call-filters/)
+  </Card>
+</CardGrid>

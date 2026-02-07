@@ -1,0 +1,171 @@
+---
+title: Code Generation (Source Generators)
+description: Build-time C# source generators in Orleans produce grain references, serializers, and method dispatching code with no runtime code generation.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans uses **C# source generators** to produce boilerplate code at build time. This includes grain method invokers, grain references (proxies), serializers, and metadata. Unlike older versions that used runtime code generation, Orleans 7+ generates all code at compile time — resulting in faster startup, AOT compatibility, and better tooling support.
+
+## What Gets Generated
+
+| Generated Code | Purpose |
+|---|---|
+| **Serializers** | Efficient read/write of `[GenerateSerializer]` types |
+| **Grain references** | Client-side proxies for calling grain methods |
+| **Method invokers** | Server-side dispatching of grain method calls |
+| **Metadata** | Type registration, interface-to-implementation mapping |
+
+## How It Works
+
+When you build a project that references Orleans, the source generator:
+
+<Steps>
+1. **Scans** for types marked with `[GenerateSerializer]`, grain interfaces (`IGrainWithXKey`), and grain implementations.
+
+2. **Generates serializers** for each `[GenerateSerializer]` type, using `[Id(n)]` attributes for wire-format stability.
+
+3. **Generates grain references** — lightweight proxy classes that implement grain interfaces and route calls through the Orleans runtime.
+
+4. **Generates invokers** — server-side code that receives messages and dispatches them to the correct grain method.
+
+5. **Outputs C# files** into the build pipeline, visible as generated sources in your IDE.
+</Steps>
+
+## Viewing Generated Code
+
+You can inspect the generated source files in your IDE or the build output:
+
+**Visual Studio:** Expand Dependencies → Analyzers → Orleans.CodeGenerator in Solution Explorer.
+
+**CLI:** The generated files are in `obj/Debug/net8.0/generated/Orleans.CodeGenerator/`.
+
+## The [GenerateSerializer] Attribute
+
+Applied to any type that needs to be serialized by Orleans — state classes, DTOs, events, and method parameters:
+
+```csharp
+[GenerateSerializer]
+public class OrderInfo
+{
+    [Id(0)]
+    public string OrderId { get; set; } = "";
+
+    [Id(1)]
+    public decimal Total { get; set; }
+
+    [Id(2)]
+    public List<LineItem> Items { get; set; } = [];
+}
+```
+
+The generator produces a `Codec` and `Copier` implementation for this type.
+
+<Aside type="tip">
+  If you forget `[GenerateSerializer]` on a type used in grain method signatures, you'll get a build error telling you exactly which type needs the attribute.
+</Aside>
+
+## The [Alias] Attribute
+
+Use `[Alias]` to assign a stable type name that survives refactoring:
+
+```csharp
+[GenerateSerializer]
+[Alias("MyApp.OrderInfo")]
+public class OrderInfo
+{
+    // Even if the class is renamed or moved, persisted data
+    // will still deserialize correctly via the alias
+}
+```
+
+This is important for types stored in persistent state or event logs.
+
+## Grain Interface Code Generation
+
+For each grain interface, the generator produces:
+
+- A **grain reference** (proxy) class used by callers.
+- A **method invoker** used by the hosting silo to dispatch calls.
+
+```csharp
+// You write this:
+public interface IOrderGrain : IGrainWithStringKey
+{
+    ValueTask<OrderInfo> GetOrder();
+    ValueTask PlaceOrder(OrderInfo info);
+}
+
+// The generator produces (simplified):
+// - OrderGrainReference : IOrderGrain (client proxy)
+// - OrderGrainMethodInvoker (server dispatcher)
+```
+
+You never interact with these generated types directly — `IGrainFactory.GetGrain<T>` returns the generated reference automatically.
+
+## Assembly-Level Configuration
+
+Control code generation behavior with assembly-level attributes:
+
+```csharp
+// Generate serializers for all types in a specific namespace
+[assembly: GenerateCodeForDeclaringAssembly]
+
+// Include types from referenced assemblies
+[assembly: KnownAssembly(typeof(SomeExternalType))]
+```
+
+## AOT Compatibility
+
+Because all code is generated at build time, Orleans works with **Native AOT** and **trimming**:
+
+```xml
+<PropertyGroup>
+    <PublishAot>true</PublishAot>
+</PropertyGroup>
+```
+
+No runtime reflection or dynamic code generation is needed.
+
+<Aside>
+  AOT support requires Orleans 8+ and .NET 8+. Ensure all types used in grain interfaces are marked with `[GenerateSerializer]`.
+</Aside>
+
+## Troubleshooting
+
+### Common Build Errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `Type X is not serializable` | Missing `[GenerateSerializer]` | Add the attribute to the type |
+| `Member has no [Id] attribute` | Property/field missing `[Id(n)]` | Add `[Id(n)]` to each serialized member |
+| `Duplicate [Id] value` | Two members share the same ID | Assign unique IDs to each member |
+
+### Generator Not Running
+
+If code generation seems inactive:
+
+1. Ensure `Microsoft.Orleans.Sdk` is referenced (it includes the generator).
+2. Clean and rebuild the solution.
+3. Check the build output for generator diagnostics.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Serialization Framework" icon="seti:json">
+    Deep dive into Orleans serialization capabilities and version tolerance.
+    [Learn more](/features/serialization-framework/)
+  </Card>
+  <Card title="Immutability Optimization" icon="rocket">
+    Skip deep-copying for immutable types to improve performance.
+    [Learn more](/features/immutability-optimization/)
+  </Card>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of defining and implementing grains.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="Grain Interface Versioning" icon="setting">
+    Version interfaces for rolling upgrades with generated code.
+    [Learn more](/features/grain-interface-versioning/)
+  </Card>
+</CardGrid>

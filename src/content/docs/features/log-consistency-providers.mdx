@@ -1,0 +1,182 @@
+---
+title: Log-Consistency Providers
+description: Configure how Orleans journaled grains store events and state — using state snapshots, event logs, or custom storage.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Log-consistency providers** control how [journaled grains](/features/journaled-grains/) persist their events and state. Orleans includes three built-in providers, each with different trade-offs for storage, performance, and capabilities.
+
+## Built-in Providers
+
+| Provider | Stores | Event Retrieval | Best For |
+|---|---|---|---|
+| State Storage | State snapshots only | No | Simple event sourcing without audit needs |
+| Log Storage | Full event log | Yes | Audit trails, event replay, debugging |
+| Custom Storage | Developer-defined | Developer-defined | Integration with external event stores |
+
+## State Storage Provider
+
+The **state storage** provider stores only the latest state snapshot after each batch of events. It does not store individual events. This is the simplest and most storage-efficient option.
+
+### Configuration
+
+```csharp
+siloBuilder.AddStateStorageBasedLogConsistencyProvider("StateStorage");
+```
+
+You must also configure a grain storage provider to store the snapshots:
+
+```csharp
+siloBuilder.AddAzureTableGrainStorage("OrleansStorage", options =>
+{
+    options.TableServiceClient = new TableServiceClient(connectionString);
+});
+```
+
+### Usage
+
+```csharp
+[LogConsistencyProvider(ProviderName = "StateStorage")]
+[StorageProvider(ProviderName = "OrleansStorage")]
+public class AccountGrain :
+    JournaledGrain<AccountState, AccountEvent>,
+    IAccountGrain
+{
+    // State is loaded from a snapshot on activation
+    // After ConfirmEvents(), the full state is written as a snapshot
+}
+```
+
+<Aside>
+  With the state storage provider, `RetrieveConfirmedEvents` is not available since individual events are not stored. Use this provider when you need event sourcing semantics without event replay.
+</Aside>
+
+## Log Storage Provider
+
+The **log storage** provider stores the complete event log. State is reconstructed by replaying all events from the beginning. This supports full event retrieval for auditing and debugging.
+
+### Configuration
+
+```csharp
+siloBuilder.AddLogStorageBasedLogConsistencyProvider("LogStorage");
+```
+
+Like state storage, you need a grain storage provider:
+
+```csharp
+siloBuilder.AddMemoryGrainStorage("OrleansStorage");
+```
+
+### Usage
+
+```csharp
+[LogConsistencyProvider(ProviderName = "LogStorage")]
+[StorageProvider(ProviderName = "OrleansStorage")]
+public class AuditGrain :
+    JournaledGrain<AuditState, AuditEvent>,
+    IAuditGrain
+{
+    public async ValueTask<List<AuditEvent>> GetFullHistory()
+    {
+        // Retrieve all events from the beginning
+        var events = await RetrieveConfirmedEvents(0, Version);
+        return events.ToList();
+    }
+}
+```
+
+<Aside type="caution">
+  The log storage provider loads all events on activation to reconstruct state. For grains with many events, this can be slow. Consider periodic snapshotting or using the state storage provider for high-volume grains.
+</Aside>
+
+## Custom Storage Provider
+
+The **custom storage** provider lets you implement your own storage logic by overriding methods on the grain. This is useful for integrating with external event stores like EventStoreDB or Apache Kafka.
+
+### Configuration
+
+```csharp
+siloBuilder.AddCustomStorageBasedLogConsistencyProvider("CustomStorage");
+```
+
+### Implementation
+
+Override `ReadStateFromStorage` and `ApplyUpdatesToStorage` on the grain:
+
+```csharp
+[LogConsistencyProvider(ProviderName = "CustomStorage")]
+public class CustomAccountGrain :
+    JournaledGrain<AccountState, AccountEvent>,
+    IAccountGrain
+{
+    protected override async Task<KeyValuePair<int, AccountState>>
+        ReadStateFromStorage()
+    {
+        // Read the latest state from your custom store
+        var (version, state) = await _customStore.LoadAsync(
+            this.GetPrimaryKeyString());
+        return new KeyValuePair<int, AccountState>(version, state);
+    }
+
+    protected override async Task<bool> ApplyUpdatesToStorage(
+        IReadOnlyList<AccountEvent> updates,
+        int expectedVersion)
+    {
+        // Write events to your custom store
+        var success = await _customStore.AppendEventsAsync(
+            this.GetPrimaryKeyString(),
+            updates,
+            expectedVersion);
+        return success;
+    }
+}
+```
+
+The `ApplyUpdatesToStorage` method should return `true` if the events were successfully stored, or `false` if there was a version conflict (optimistic concurrency).
+
+## Choosing a Provider
+
+| Consideration | Recommendation |
+|---|---|
+| Need event history / audit trail | Log Storage or Custom Storage |
+| High event volume per grain | State Storage (avoids replay overhead) |
+| External event store integration | Custom Storage |
+| Simplest setup | State Storage |
+| Multi-cluster replication | Custom Storage with shared store |
+
+## Assigning Providers to Grains
+
+Use the `[LogConsistencyProvider]` attribute on the grain class:
+
+```csharp
+[LogConsistencyProvider(ProviderName = "LogStorage")]
+public class EventSourcedGrain :
+    JournaledGrain<MyState, MyEvent>, IMyGrain
+{
+    // Uses the LogStorage provider
+}
+```
+
+Different grain types can use different providers within the same silo.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Journaled Grains" icon="pencil">
+    Learn the fundamentals of event sourcing with JournaledGrain.
+    [Learn more](/features/journaled-grains/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Compare event sourcing with traditional state persistence.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="ACID Transactions" icon="pencil">
+    Coordinate multi-grain operations with distributed transactions.
+    [Learn more](/features/acid-transactions/)
+  </Card>
+  <Card title="Serialization Framework" icon="seti:json">
+    Understand how events and state are serialized.
+    [Learn more](/features/serialization-framework/)
+  </Card>
+</CardGrid>

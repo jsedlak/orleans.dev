@@ -1,0 +1,201 @@
+---
+title: ASP.NET Core Co-Hosting
+description: Host Orleans silos alongside ASP.NET Core applications in a single process, sharing dependency injection and configuration.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans silos can be **co-hosted** with ASP.NET Core applications in a single process. This means your web API and grain silo share the same dependency injection container, configuration, and process lifecycle. Co-hosting is the recommended approach for most applications — it simplifies deployment and eliminates the need for a separate client connection.
+
+## Basic Setup
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// Add Orleans silo to the ASP.NET Core host
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseLocalhostClustering();
+    siloBuilder.AddMemoryGrainStorage("Default");
+});
+
+var app = builder.Build();
+
+// Use IGrainFactory directly — no separate client needed
+app.MapGet("/players/{id:guid}", async (IGrainFactory grains, Guid id) =>
+{
+    var player = grains.GetGrain<IPlayerGrain>(id);
+    var name = await player.GetName();
+    return Results.Ok(new { id, name });
+});
+
+app.MapPost("/players/{id:guid}/name", async (
+    IGrainFactory grains, Guid id, SetNameRequest request) =>
+{
+    var player = grains.GetGrain<IPlayerGrain>(id);
+    await player.SetName(request.Name);
+    return Results.Ok();
+});
+
+app.Run();
+```
+
+<Aside type="tip">
+  When co-hosting, you access grains through `IGrainFactory` (available via DI), not `IClusterClient`. The silo is both the host and the client in a single process.
+</Aside>
+
+## How It Works
+
+`UseOrleans()` adds the Orleans silo as a hosted service within the ASP.NET Core application:
+
+- The silo starts when the ASP.NET Core host starts.
+- The silo stops gracefully when the host shuts down.
+- `IGrainFactory` and `IClusterClient` are registered in the DI container automatically.
+- All ASP.NET Core services are available for injection into grain constructors.
+
+## Sharing Dependency Injection
+
+Grains can inject any service registered in the ASP.NET Core DI container:
+
+```csharp
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IEmailService, SmtpEmailService>();
+
+builder.UseOrleans(siloBuilder =>
+{
+    // ...
+});
+```
+
+```csharp
+public class NotificationGrain : Grain, INotificationGrain
+{
+    private readonly IEmailService _email;
+    private readonly IHttpClientFactory _httpFactory;
+
+    public NotificationGrain(
+        IEmailService email,
+        IHttpClientFactory httpFactory)
+    {
+        _email = email;
+        _httpFactory = httpFactory;
+    }
+
+    public async ValueTask SendAlert(string message)
+    {
+        await _email.SendAsync("admin@example.com", "Alert", message);
+    }
+}
+```
+
+## Production Configuration
+
+For production, configure clustering, persistence, and endpoints:
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.Configure<ClusterOptions>(options =>
+    {
+        options.ClusterId = "prod";
+        options.ServiceId = "my-app";
+    });
+
+    siloBuilder.UseRedisClustering(options =>
+    {
+        options.ConfigurationOptions = new()
+        {
+            EndPoints = { "redis:6379" }
+        };
+    });
+
+    siloBuilder.AddRedisGrainStorage("Default", options =>
+    {
+        options.ConfigurationOptions = new()
+        {
+            EndPoints = { "redis:6379" }
+        };
+    });
+
+    siloBuilder.Configure<EndpointOptions>(options =>
+    {
+        options.SiloPort = 11111;
+        options.GatewayPort = 30000;
+        options.AdvertisedIPAddress = IPAddress.Parse(
+            Environment.GetEnvironmentVariable("POD_IP")!);
+    });
+});
+```
+
+## Multiple Silo Replicas
+
+When running multiple instances of the same co-hosted application (e.g., behind a load balancer), each instance runs its own silo. They form a cluster using the configured membership provider:
+
+```
+Load Balancer
+├── Instance 1 (ASP.NET Core + Orleans Silo)
+├── Instance 2 (ASP.NET Core + Orleans Silo)
+└── Instance 3 (ASP.NET Core + Orleans Silo)
+```
+
+HTTP requests are load-balanced, but grain calls are routed to the correct silo regardless of which instance received the HTTP request.
+
+<Aside>
+  Each ASP.NET Core instance is both a web server and a full Orleans silo. Grain calls between instances use Orleans' internal messaging, not HTTP.
+</Aside>
+
+## SignalR Integration
+
+Co-hosting enables easy integration with ASP.NET Core SignalR for real-time web notifications:
+
+```csharp
+builder.Services.AddSignalR();
+
+builder.UseOrleans(siloBuilder => { /* ... */ });
+
+var app = builder.Build();
+
+app.MapHub<NotificationHub>("/notifications");
+```
+
+Grains can push to SignalR clients by injecting `IHubContext`:
+
+```csharp
+public class AlertGrain : Grain, IAlertGrain
+{
+    private readonly IHubContext<NotificationHub> _hub;
+
+    public AlertGrain(IHubContext<NotificationHub> hub)
+    {
+        _hub = hub;
+    }
+
+    public async ValueTask BroadcastAlert(string message)
+    {
+        await _hub.Clients.All.SendAsync("ReceiveAlert", message);
+    }
+}
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title=".NET Aspire Integration" icon="rocket">
+    Use Aspire for local development with automatic service discovery.
+    [Learn more](/features/aspire-integration/)
+  </Card>
+  <Card title="Getting Started" icon="rocket">
+    Full setup guide for a new Orleans application.
+    [Get started](/guides/getting-started/)
+  </Card>
+  <Card title="Orleans Dashboard" icon="setting">
+    Add a monitoring dashboard to your co-hosted application.
+    [Learn more](/features/orleans-dashboard/)
+  </Card>
+  <Card title="Silo Clustering" icon="puzzle">
+    Configure clustering for multi-instance deployments.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+</CardGrid>

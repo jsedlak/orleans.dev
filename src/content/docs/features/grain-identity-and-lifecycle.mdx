@@ -1,0 +1,223 @@
+---
+title: Grain Identity & Lifecycle
+description: Learn how grain identities work in Orleans and how the runtime manages activation, deactivation, and garbage collection automatically.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Every grain in Orleans has a unique, stable **identity** composed of a grain type and a key. This identity persists for the lifetime of the application — grains are never "created" or "destroyed," they always logically exist. The runtime manages **activations** (in-memory instances) automatically, activating grains on demand and deactivating them when idle.
+
+## Grain Identity
+
+A grain's identity consists of two parts:
+
+1. **Grain type** — derived from the grain class name (or customized with `[GrainType]`).
+2. **Grain key** — a `Guid`, `long`, `string`, or compound key chosen by the developer.
+
+```csharp
+// Identity: (PlayerGrain, Guid("3f2504e0-4f89-11d3-9a0c-0305e82c3301"))
+var player = grains.GetGrain<IPlayerGrain>(
+    Guid.Parse("3f2504e0-4f89-11d3-9a0c-0305e82c3301"));
+
+// Identity: (SensorGrain, "sensor-42")
+var sensor = grains.GetGrain<ISensorGrain>("sensor-42");
+
+// Identity: (OrderGrain, 12345L)
+var order = grains.GetGrain<IOrderGrain>(12345L);
+```
+
+<Aside>
+  Two grains with the same key but different interfaces are different grains with different identities. `IPlayerGrain("abc")` and `ISensorGrain("abc")` are completely separate.
+</Aside>
+
+### Compound Keys
+
+Compound keys combine a primary key (`Guid` or `long`) with an additional string extension:
+
+```csharp
+public interface ITenantUserGrain : IGrainWithGuidCompoundKey
+{
+    ValueTask<string> GetDisplayName();
+}
+
+// Get a grain with a compound key
+var grain = grains.GetGrain<ITenantUserGrain>(userId, keyExtension: "tenant-a");
+```
+
+Inside the grain, retrieve both parts:
+
+```csharp
+public class TenantUserGrain : Grain, ITenantUserGrain
+{
+    public ValueTask<string> GetDisplayName()
+    {
+        var userId = this.GetPrimaryKey(out string? tenant);
+        return ValueTask.FromResult($"{tenant}/{userId}");
+    }
+}
+```
+
+### Custom Grain Type Names
+
+By default, the grain type is derived from the class name. Use `[GrainType]` to set an explicit type name — useful for versioning or when renaming classes:
+
+```csharp
+[GrainType("player")]
+public class PlayerGrain : Grain, IPlayerGrain
+{
+    // Grain type is "player" regardless of class name
+}
+```
+
+## Activation Lifecycle
+
+A grain **activation** is an in-memory instance of a grain class hosted on a specific silo. The lifecycle follows these steps:
+
+<Steps>
+1. **Request arrives** — A message is sent to a grain identity that has no current activation.
+
+2. **Placement** — The runtime selects a silo using the grain's [placement strategy](/features/grain-placement-strategies/).
+
+3. **Activation** — The runtime creates an instance, injects dependencies, and loads any [persistent state](/features/grain-persistence/).
+
+4. **OnActivateAsync** — The grain's `OnActivateAsync` method is called before any messages are delivered.
+
+5. **Message processing** — The grain processes messages one at a time in single-threaded fashion.
+
+6. **Idle detection** — When no messages arrive for a configurable period, the grain becomes eligible for deactivation.
+
+7. **OnDeactivateAsync** — The runtime calls `OnDeactivateAsync` on a best-effort basis.
+
+8. **Deactivation** — The activation is removed from memory. The grain identity still exists and will be re-activated on the next message.
+</Steps>
+
+## Controlling Activation Lifetime
+
+### Idle Deactivation
+
+By default, grains are deactivated after a period of inactivity (typically 2 minutes). You can customize this per grain type:
+
+```csharp
+public class PlayerGrain : Grain, IPlayerGrain
+{
+    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        // Keep this grain active for at least 30 minutes of idle time
+        DelayDeactivation(TimeSpan.FromMinutes(30));
+        return base.OnActivateAsync(cancellationToken);
+    }
+}
+```
+
+### Explicit Deactivation
+
+A grain can request its own deactivation:
+
+```csharp
+public ValueTask Complete()
+{
+    // Signal that this grain should be deactivated soon
+    DeactivateOnIdle();
+    return ValueTask.CompletedTask;
+}
+```
+
+<Aside type="caution">
+  `DeactivateOnIdle` does not deactivate the grain immediately — it marks the grain for deactivation after the current message completes and no further messages are pending.
+</Aside>
+
+### Collection Age Limits
+
+Configure default idle timeout for all grains or specific grain types through silo configuration:
+
+```csharp
+siloBuilder.Configure<GrainCollectionOptions>(options =>
+{
+    // Default for all grains
+    options.CollectionAge = TimeSpan.FromMinutes(5);
+
+    // Override for specific grain types
+    options.ClassSpecificCollectionAge[typeof(PlayerGrain).FullName!] =
+        TimeSpan.FromMinutes(30);
+});
+```
+
+## Activation Hooks
+
+### OnActivateAsync
+
+Called after the grain instance is created and state is loaded, but before any messages are processed. Use it to initialize resources, start timers, or validate state.
+
+```csharp
+public override async Task OnActivateAsync(CancellationToken cancellationToken)
+{
+    _cache = await LoadCacheAsync(cancellationToken);
+    _timer = RegisterGrainTimer(PollAsync, this,
+        new GrainTimerCreationOptions
+        {
+            DueTime = TimeSpan.FromSeconds(5),
+            Period = TimeSpan.FromSeconds(30)
+        });
+
+    await base.OnActivateAsync(cancellationToken);
+}
+```
+
+<Aside type="tip">
+  If `OnActivateAsync` throws, the activation fails and the caller receives an exception. The runtime will retry activation on the next message.
+</Aside>
+
+### OnDeactivateAsync
+
+Called on a best-effort basis when the grain is about to be deactivated. The `DeactivationReason` parameter tells you why:
+
+```csharp
+public override Task OnDeactivateAsync(
+    DeactivationReason reason,
+    CancellationToken cancellationToken)
+{
+    switch (reason.ReasonCode)
+    {
+        case DeactivationReasonCode.ApplicationRequested:
+            // DeactivateOnIdle() was called
+            break;
+        case DeactivationReasonCode.InactivePeriodExceeded:
+            // Grain was idle too long
+            break;
+        case DeactivationReasonCode.ShuttingDown:
+            // Silo is shutting down gracefully
+            break;
+    }
+
+    return base.OnDeactivateAsync(reason, cancellationToken);
+}
+```
+
+## Single Activation Guarantee
+
+By default, Orleans guarantees that at most **one activation** exists for any given grain identity across the entire cluster. This is enforced by the [grain directory](/features/grain-directory/). If a silo crashes, any grains it hosted will be re-activated on another silo when the next message arrives, after the directory detects the failure.
+
+<Aside>
+  The exception to single activation is [stateless worker grains](/features/stateless-worker-grains/), which allow multiple concurrent activations by design.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of defining, implementing, and calling grains.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="Turn-Based Concurrency" icon="random">
+    Understand how Orleans processes messages one at a time per grain.
+    [Learn more](/features/turn-based-concurrency/)
+  </Card>
+  <Card title="Grain Placement Strategies" icon="random">
+    Control where grains are activated in the cluster.
+    [Learn more](/features/grain-placement-strategies/)
+  </Card>
+  <Card title="Grain Directory" icon="document">
+    Learn how Orleans maps grain identities to physical locations.
+    [Learn more](/features/grain-directory/)
+  </Card>
+</CardGrid>

@@ -1,0 +1,160 @@
+---
+title: Grain Migration
+description: Migrate grains between silos without losing state via dehydration and rehydration in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Grain migration** allows Orleans to move grain activations between silos without losing their in-memory state. Instead of deactivating a grain (losing state) and reactivating it on another silo (re-loading from storage), migration **dehydrates** the grain's state on the source silo and **rehydrates** it on the target silo. This enables seamless rebalancing, rolling upgrades, and resource optimization.
+
+## How It Works
+
+<Steps>
+1. **Migration triggered** — the runtime decides to move a grain (due to rebalancing, silo shutdown, or explicit request).
+
+2. **Dehydration** — the grain's in-memory state is serialized into a migration context on the source silo.
+
+3. **Transfer** — the serialized state is sent to the target silo.
+
+4. **Rehydration** — the grain is reconstructed on the target silo with its full in-memory state intact.
+
+5. **Directory update** — the [grain directory](/features/grain-directory/) is updated to point to the new location.
+</Steps>
+
+## Implementing Migration
+
+Grains participate in migration by implementing `IGrainMigrationParticipant`:
+
+```csharp
+public class SessionGrain : Grain, ISessionGrain, IGrainMigrationParticipant
+{
+    private SessionData _data = new();
+    private int _requestCount;
+
+    public void OnDehydrate(IDehydrationContext context)
+    {
+        // Serialize state into the migration context
+        context.TryAddValue("sessionData", _data);
+        context.TryAddValue("requestCount", _requestCount);
+    }
+
+    public void OnRehydrate(IRehydrationContext context)
+    {
+        // Restore state from the migration context
+        if (context.TryGetValue("sessionData", out SessionData? data))
+            _data = data;
+        if (context.TryGetValue("requestCount", out int count))
+            _requestCount = count;
+    }
+}
+```
+
+### IDehydrationContext
+
+Used during dehydration to store the grain's state:
+
+| Method | Description |
+|---|---|
+| `TryAddValue<T>(key, value)` | Stores a named value in the migration context. |
+
+### IRehydrationContext
+
+Used during rehydration to restore the grain's state:
+
+| Method | Description |
+|---|---|
+| `TryGetValue<T>(key, out T value)` | Retrieves a named value from the migration context. |
+
+<Aside type="tip">
+  All values stored in the migration context must be serializable by the Orleans serializer. Use `[GenerateSerializer]` and `[Id(n)]` attributes on custom types.
+</Aside>
+
+## Migration with Persistent State
+
+Grains that use [grain persistence](/features/grain-persistence/) benefit from migration because their persistent state handles (`IPersistentState<T>`) are automatically migrated. You only need to implement `IGrainMigrationParticipant` for additional in-memory state that isn't covered by persistence.
+
+```csharp
+public class PlayerGrain : Grain, IPlayerGrain, IGrainMigrationParticipant
+{
+    private readonly IPersistentState<PlayerState> _state;
+    private int _cachedScore; // In-memory only
+
+    public PlayerGrain(
+        [PersistentState("player", "Default")]
+        IPersistentState<PlayerState> state)
+    {
+        _state = state;
+        // _state is migrated automatically
+    }
+
+    public void OnDehydrate(IDehydrationContext context)
+    {
+        // Only need to migrate non-persistent in-memory state
+        context.TryAddValue("cachedScore", _cachedScore);
+    }
+
+    public void OnRehydrate(IRehydrationContext context)
+    {
+        if (context.TryGetValue("cachedScore", out int score))
+            _cachedScore = score;
+    }
+}
+```
+
+## When Migration Occurs
+
+Grain migration can be triggered by:
+
+- **Silo graceful shutdown** — when a silo is shutting down, it migrates its grains to other silos.
+- **Rebalancing** — the runtime may move grains to balance load across the cluster.
+- **Explicit request** — a grain can request its own migration via `this.MigrateOnIdle()`.
+
+### Requesting Migration
+
+A grain can request to be migrated to a different silo:
+
+```csharp
+public class WorkerGrain : Grain, IWorkerGrain, IGrainMigrationParticipant
+{
+    public ValueTask RequestMigration()
+    {
+        // The grain will be migrated after the current turn completes
+        this.MigrateOnIdle();
+        return ValueTask.CompletedTask;
+    }
+
+    // ...dehydrate/rehydrate methods
+}
+```
+
+<Aside>
+  `MigrateOnIdle` marks the grain for migration after the current message is processed. The runtime selects the target silo based on the grain's placement strategy.
+</Aside>
+
+## Best Practices
+
+- **Keep migration data small** — serialize only the essential state needed to continue operation.
+- **Use persistent state for durability** — migration transfers in-memory state, but a crash during migration could lose data. Critical state should always be persisted.
+- **Test migration** — verify that grains function correctly after dehydration and rehydration, especially for grains with complex state.
+- **Handle missing keys** — always check `TryGetValue` return values in `OnRehydrate`, since new fields may not exist in older migration contexts.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Directory" icon="document">
+    Learn how grain locations are tracked across the cluster.
+    [Learn more](/features/grain-directory/)
+  </Card>
+  <Card title="Silo Clustering" icon="puzzle">
+    Understand cluster membership and failure detection.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Add durable state to grains that survives restarts.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="Grain Placement Strategies" icon="random">
+    Control where grains are activated (and migrated to).
+    [Learn more](/features/grain-placement-strategies/)
+  </Card>
+</CardGrid>

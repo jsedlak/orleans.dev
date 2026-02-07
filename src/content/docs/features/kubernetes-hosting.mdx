@@ -1,0 +1,215 @@
+---
+title: Kubernetes Hosting
+description: Deploy Orleans clusters on Kubernetes with dedicated hosting that reads pod labels, detects dead silos, and cleans up membership automatically.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans provides a dedicated **Kubernetes hosting** package that integrates with the Kubernetes API to manage cluster membership. It uses pod labels and the Kubernetes API for silo discovery, detects terminated pods, and cleans up stale membership entries automatically.
+
+## How It Works
+
+Instead of relying on a traditional membership provider (Redis, Azure Tables, etc.), Kubernetes hosting uses the Kubernetes API as the source of truth for cluster membership:
+
+- **Silo discovery** — reads pod metadata to find other Orleans silos.
+- **Failure detection** — monitors pod status to detect terminated silos.
+- **Membership cleanup** — automatically removes dead silos from the membership table.
+- **Graceful shutdown** — integrates with Kubernetes pod termination lifecycle.
+
+## Setup
+
+### Install the Package
+
+```bash
+dotnet add package Microsoft.Orleans.Hosting.Kubernetes
+```
+
+### Configure the Silo
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseKubernetesHosting();
+});
+
+builder.Build().Run();
+```
+
+`UseKubernetesHosting()` automatically:
+
+- Reads `ClusterId` and `ServiceId` from environment variables or pod labels.
+- Configures silo-to-silo and gateway endpoints.
+- Enables Kubernetes-based liveness and readiness probes.
+
+<Aside type="tip">
+  `UseKubernetesHosting()` does not replace the clustering provider — you still need a clustering provider like Redis or Azure Tables. Kubernetes hosting adds pod-aware lifecycle management on top of the clustering provider.
+</Aside>
+
+## Kubernetes Manifest
+
+Deploy Orleans silos as a Kubernetes Deployment or StatefulSet with the appropriate labels and environment variables:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orleans-silo
+  labels:
+    orleans/serviceId: my-app
+    orleans/clusterId: my-cluster
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: orleans-silo
+  template:
+    metadata:
+      labels:
+        app: orleans-silo
+        orleans/serviceId: my-app
+        orleans/clusterId: my-cluster
+    spec:
+      containers:
+        - name: silo
+          image: myregistry/orleans-silo:latest
+          ports:
+            - containerPort: 11111  # Silo-to-silo
+              name: silo
+            - containerPort: 30000  # Client gateway
+              name: gateway
+          env:
+            - name: ORLEANS_SERVICE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['orleans/serviceId']
+            - name: ORLEANS_CLUSTER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['orleans/clusterId']
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+```
+
+### RBAC Configuration
+
+The silo pod needs permissions to read pod information from the Kubernetes API:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orleans-silo
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orleans-silo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: orleans-silo
+subjects:
+  - kind: ServiceAccount
+    name: default
+```
+
+## Health Probes
+
+Kubernetes hosting automatically exposes liveness and readiness endpoints. Configure them in your pod spec:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+```
+
+## Scaling
+
+Kubernetes Horizontal Pod Autoscaler (HPA) can scale Orleans silos based on CPU, memory, or custom metrics:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orleans-silo-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orleans-silo
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+
+<Aside type="caution">
+  When scaling down, Kubernetes terminates pods. Orleans handles this gracefully by migrating grains to remaining silos, but rapid scale-down can cause temporary performance impact as grains are reactivated.
+</Aside>
+
+## Combining with Aspire
+
+For local development with Aspire and production deployment on Kubernetes:
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    if (builder.Environment.IsProduction())
+    {
+        siloBuilder.UseKubernetesHosting();
+    }
+});
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Silo Clustering" icon="puzzle">
+    Configure the underlying clustering provider for Kubernetes deployments.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Grain Interface Versioning" icon="setting">
+    Version interfaces for rolling Kubernetes deployments.
+    [Learn more](/features/grain-interface-versioning/)
+  </Card>
+  <Card title="Heterogeneous Silos" icon="setting">
+    Run different workloads on different Kubernetes Deployments.
+    [Learn more](/features/heterogeneous-silos/)
+  </Card>
+  <Card title=".NET Aspire Integration" icon="rocket">
+    Use Aspire for local development alongside Kubernetes production hosting.
+    [Learn more](/features/aspire-integration/)
+  </Card>
+</CardGrid>

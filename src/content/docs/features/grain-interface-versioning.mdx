@@ -1,0 +1,158 @@
+---
+title: Grain Interface Versioning
+description: Version grain interfaces for rolling upgrades and staged deployments with automatic compatibility routing in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Grain interface versioning** enables rolling upgrades and staged deployments by allowing multiple versions of a grain interface to coexist in the same cluster. The runtime maintains compatibility mappings and routes requests to silos running compatible versions.
+
+## How It Works
+
+1. Grain interfaces are assigned a **version number**.
+2. When a cluster has silos running different versions, the runtime tracks which versions each silo supports.
+3. Requests are routed to silos that support a compatible version of the requested interface.
+4. Version compatibility is determined by a configurable **compatibility strategy**.
+
+## Assigning Versions
+
+Use the `[Version]` attribute on grain interfaces:
+
+```csharp
+// Version 1 — original interface
+[Version(1)]
+public interface IPlayerGrain : IGrainWithGuidKey
+{
+    ValueTask<string> GetName();
+    ValueTask SetName(string name);
+}
+```
+
+When you add new methods, increment the version:
+
+```csharp
+// Version 2 — added GetScore
+[Version(2)]
+public interface IPlayerGrain : IGrainWithGuidKey
+{
+    ValueTask<string> GetName();
+    ValueTask SetName(string name);
+    ValueTask<int> GetScore();
+}
+```
+
+<Aside type="tip">
+  If no `[Version]` attribute is specified, the interface defaults to version 0.
+</Aside>
+
+## Compatibility Strategies
+
+The **compatibility strategy** determines which interface versions can communicate with each other:
+
+```csharp
+siloBuilder.Configure<GrainVersioningOptions>(options =>
+{
+    options.DefaultCompatibilityStrategy =
+        nameof(BackwardCompatible);
+});
+```
+
+| Strategy | Behavior |
+|---|---|
+| `AllVersionsCompatible` | All versions can communicate with each other. The simplest strategy. |
+| `BackwardCompatible` | Newer versions can call older versions, but not vice versa. Default. |
+| `StrictVersionCompatible` | Only the exact same version can communicate. Most restrictive. |
+
+### Backward Compatibility (Default)
+
+With backward compatibility, a silo running V2 can communicate with grains on a silo running V1, but V1 cannot call methods that only exist in V2:
+
+```
+V2 silo → V1 silo: ✅ (V2 is backward compatible with V1)
+V1 silo → V2 silo: ❌ (V1 doesn't know about V2 methods)
+```
+
+## Selector Strategies
+
+The **version selector strategy** controls which version is preferred when multiple compatible versions are available:
+
+```csharp
+siloBuilder.Configure<GrainVersioningOptions>(options =>
+{
+    options.DefaultVersionSelectorStrategy =
+        nameof(MinimumVersion);
+});
+```
+
+| Strategy | Behavior |
+|---|---|
+| `AllCompatibleVersions` | No preference — any compatible version may be selected. |
+| `LatestVersion` | Prefer the latest (highest) compatible version. |
+| `MinimumVersion` | Prefer the oldest (lowest) compatible version. Default. |
+
+## Rolling Upgrade Workflow
+
+<Steps>
+1. **Deploy V2 silos** alongside existing V1 silos. The cluster now has mixed versions.
+
+2. **V2 requests routed to V2 silos** — new grains that need V2 features are activated on V2 silos.
+
+3. **V1 requests continue on V1** — existing grains on V1 silos continue operating normally.
+
+4. **Drain V1 silos** — once confident in V2, remove V1 silos. Grains migrate to V2 silos on next activation.
+
+5. **Cluster fully on V2** — all silos now run V2 and old routing rules are cleaned up.
+</Steps>
+
+<Aside>
+  During a rolling upgrade, avoid breaking changes like removing methods or changing method signatures. Only add new methods to ensure backward compatibility.
+</Aside>
+
+## Per-Interface Overrides
+
+You can configure different strategies for different interfaces:
+
+```csharp
+siloBuilder.Configure<GrainVersioningOptions>(options =>
+{
+    options.DefaultCompatibilityStrategy = nameof(BackwardCompatible);
+
+    // Override for a specific interface
+    options.OverrideCompatibilityStrategy(
+        typeof(ICriticalGrain),
+        nameof(StrictVersionCompatible));
+
+    options.OverrideVersionSelectorStrategy(
+        typeof(ICriticalGrain),
+        nameof(LatestVersion));
+});
+```
+
+## Best Practices
+
+- **Always increment versions** when changing an interface — don't modify existing methods.
+- **Only add methods** in new versions — removing or changing existing methods breaks backward compatibility.
+- **Test with mixed versions** before deploying to production.
+- **Use `BackwardCompatible`** as the default strategy for most applications.
+- **Monitor version distribution** across silos to track upgrade progress.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Kubernetes Hosting" icon="puzzle">
+    Deploy rolling upgrades on Kubernetes with Orleans-aware orchestration.
+    [Learn more](/features/kubernetes-hosting/)
+  </Card>
+  <Card title="Heterogeneous Silos" icon="setting">
+    Run different grain types on different silos for staged rollouts.
+    [Learn more](/features/heterogeneous-silos/)
+  </Card>
+  <Card title="Serialization Framework" icon="seti:json">
+    Ensure serialized data is version-tolerant across upgrades.
+    [Learn more](/features/serialization-framework/)
+  </Card>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Understand grain interface fundamentals.
+    [Learn more](/features/grains/)
+  </Card>
+</CardGrid>
