@@ -1,0 +1,211 @@
+---
+title: Silo Clustering
+description: Automatic cluster membership, failure detection, and silo discovery using pluggable providers in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans silos form a **cluster** — a group of processes that cooperate to host grains. The clustering subsystem handles silo discovery, membership management, and failure detection. It uses a pluggable **membership provider** to store cluster state in a shared, durable backend.
+
+## How Clustering Works
+
+<Steps>
+1. **Silo startup** — a new silo registers itself in the membership table via the configured provider.
+
+2. **Silo discovery** — the silo reads the membership table to learn about other active silos in the cluster.
+
+3. **Failure detection** — silos periodically probe each other using a protocol based on indirect probing. If a silo fails to respond, other silos vote to declare it dead.
+
+4. **Membership update** — when a silo is declared dead, its entry is updated in the membership table and all remaining silos adjust their routing tables.
+
+5. **Grain recovery** — grains that were hosted on the failed silo are re-activated on demand on other silos.
+</Steps>
+
+## Configuring a Membership Provider
+
+Register a membership provider on the silo builder. The provider determines where cluster membership data is stored.
+
+<Tabs>
+  <TabItem label="Redis">
+    **Package:** `Microsoft.Orleans.Clustering.Redis`
+
+    ```csharp
+    siloBuilder.UseRedisClustering(options =>
+    {
+        options.ConfigurationOptions = new()
+        {
+            EndPoints = { "localhost:6379" }
+        };
+    });
+    ```
+  </TabItem>
+  <TabItem label="Azure Tables">
+    **Package:** `Microsoft.Orleans.Clustering.AzureStorage`
+
+    ```csharp
+    siloBuilder.UseAzureStorageClustering(options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://myaccount.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+    ```
+  </TabItem>
+  <TabItem label="ADO.NET">
+    **Package:** `Microsoft.Orleans.Clustering.AdoNet`
+
+    ```csharp
+    siloBuilder.UseAdoNetClustering(options =>
+    {
+        options.Invariant = "Microsoft.Data.SqlClient";
+        options.ConnectionString = "Server=localhost;Database=Orleans;...";
+    });
+    ```
+  </TabItem>
+  <TabItem label="Consul">
+    **Package:** `Microsoft.Orleans.Clustering.Consul`
+
+    ```csharp
+    siloBuilder.UseConsulSiloClustering(options =>
+    {
+        options.Address = new Uri("http://localhost:8500");
+    });
+    ```
+  </TabItem>
+  <TabItem label="ZooKeeper">
+    **Package:** `Microsoft.Orleans.Clustering.ZooKeeper`
+
+    ```csharp
+    siloBuilder.UseZooKeeperClustering(options =>
+    {
+        options.ConnectionString = "localhost:2181";
+    });
+    ```
+  </TabItem>
+  <TabItem label="Development">
+    For local development with a single silo:
+
+    ```csharp
+    siloBuilder.UseLocalhostClustering();
+    ```
+
+    <Aside type="caution">
+      Localhost clustering is only for development. It does not support multiple silos and provides no failure detection.
+    </Aside>
+  </TabItem>
+</Tabs>
+
+### Using Aspire
+
+With .NET Aspire, clustering is configured in the AppHost:
+
+```csharp
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis);
+
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WaitFor(redis);
+```
+
+## Client Configuration
+
+External clients (like ASP.NET Core apps) that connect to the cluster need a matching gateway provider:
+
+<Tabs>
+  <TabItem label="Redis">
+    ```csharp
+    clientBuilder.UseRedisGatewayListProvider(options =>
+    {
+        options.ConfigurationOptions = new()
+        {
+            EndPoints = { "localhost:6379" }
+        };
+    });
+    ```
+  </TabItem>
+  <TabItem label="Azure Tables">
+    ```csharp
+    clientBuilder.UseAzureStorageGatewayListProvider(options =>
+    {
+        options.TableServiceClient = new TableServiceClient(connectionString);
+    });
+    ```
+  </TabItem>
+  <TabItem label="Development">
+    ```csharp
+    clientBuilder.UseLocalhostClustering();
+    ```
+  </TabItem>
+</Tabs>
+
+## Cluster Identity
+
+Every Orleans cluster is identified by two values:
+
+| Property | Purpose |
+|---|---|
+| `ClusterId` | Identifies the logical cluster. Silos with the same `ClusterId` form a single cluster. |
+| `ServiceId` | Identifies the application. Shared across cluster restarts. Used to scope grain state in storage. |
+
+```csharp
+siloBuilder.Configure<ClusterOptions>(options =>
+{
+    options.ClusterId = "my-cluster";
+    options.ServiceId = "my-app";
+});
+```
+
+<Aside type="tip">
+  Use different `ClusterId` values for staging and production to keep them isolated. Use the same `ServiceId` if you want them to share the same persistent state.
+</Aside>
+
+## Failure Detection
+
+Orleans uses an **indirect probing protocol** for failure detection:
+
+1. Each silo monitors a subset of other silos.
+2. When a silo suspects a failure, it asks other silos to probe the suspect.
+3. If enough silos agree the target is unreachable, they vote to declare it dead.
+4. The dead silo is removed from the membership table.
+
+This protocol tolerates network partitions and false positives better than simple heartbeats.
+
+### Tuning Failure Detection
+
+```csharp
+siloBuilder.Configure<ClusterMembershipOptions>(options =>
+{
+    // How often silos probe each other
+    options.ProbeTimeout = TimeSpan.FromSeconds(5);
+
+    // Number of missed probes before suspecting failure
+    options.NumMissedProbesLimit = 3;
+
+    // Number of votes needed to declare a silo dead
+    options.NumVotesForDeathDeclaration = 2;
+});
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Directory" icon="document">
+    Learn how Orleans maps grain identities to their physical locations.
+    [Learn more](/features/grain-directory/)
+  </Card>
+  <Card title="Heterogeneous Silos" icon="setting">
+    Run different grain types on different silos within the same cluster.
+    [Learn more](/features/heterogeneous-silos/)
+  </Card>
+  <Card title="Kubernetes Hosting" icon="puzzle">
+    Deploy Orleans clusters on Kubernetes with automatic silo management.
+    [Learn more](/features/kubernetes-hosting/)
+  </Card>
+  <Card title="Grain Migration" icon="right-arrow">
+    Migrate grains between silos without losing state.
+    [Learn more](/features/grain-migration/)
+  </Card>
+</CardGrid>

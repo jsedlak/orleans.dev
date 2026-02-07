@@ -1,0 +1,222 @@
+---
+title: Journaled Grains
+description: Model grain state as a sequence of events using JournaledGrain for event sourcing in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Journaled grains** bring event sourcing to Orleans. Instead of storing the current state directly, a journaled grain models state as the result of applying a sequence of **events**. The grain derives from `JournaledGrain<TState, TEvent>` and uses `RaiseEvent` to append events, which are applied to the state via a transition function.
+
+## How It Works
+
+1. The grain raises events using `RaiseEvent`.
+2. Each event is applied to the state via a `StateTransition` method (by convention, an `Apply` overload on the state class).
+3. The log-consistency provider stores the events and/or state snapshots.
+4. On activation, the grain replays events or loads the latest snapshot to reconstruct state.
+
+## Defining Events
+
+Events are plain C# classes that describe what happened. They must be serializable:
+
+```csharp
+[GenerateSerializer]
+public abstract record AccountEvent;
+
+[GenerateSerializer]
+public record DepositEvent(
+    [property: Id(0)] decimal Amount) : AccountEvent;
+
+[GenerateSerializer]
+public record WithdrawEvent(
+    [property: Id(0)] decimal Amount) : AccountEvent;
+
+[GenerateSerializer]
+public record AccountCreatedEvent(
+    [property: Id(0)] string Owner) : AccountEvent;
+```
+
+## Defining State with Transitions
+
+The state class defines `Apply` method overloads for each event type. These are called by the runtime when events are raised:
+
+```csharp
+[GenerateSerializer]
+public class AccountState
+{
+    [Id(0)]
+    public string Owner { get; set; } = "";
+
+    [Id(1)]
+    public decimal Balance { get; set; }
+
+    [Id(2)]
+    public int Version { get; set; }
+
+    public void Apply(AccountCreatedEvent evt)
+    {
+        Owner = evt.Owner;
+    }
+
+    public void Apply(DepositEvent evt)
+    {
+        Balance += evt.Amount;
+        Version++;
+    }
+
+    public void Apply(WithdrawEvent evt)
+    {
+        Balance -= evt.Amount;
+        Version++;
+    }
+}
+```
+
+## Implementing a Journaled Grain
+
+Derive from `JournaledGrain<TState, TEvent>`:
+
+```csharp
+public interface IAccountGrain : IGrainWithStringKey
+{
+    ValueTask Create(string owner);
+    ValueTask<decimal> Deposit(decimal amount);
+    ValueTask<decimal> Withdraw(decimal amount);
+    ValueTask<decimal> GetBalance();
+}
+
+public class AccountGrain :
+    JournaledGrain<AccountState, AccountEvent>,
+    IAccountGrain
+{
+    public async ValueTask Create(string owner)
+    {
+        RaiseEvent(new AccountCreatedEvent(owner));
+        await ConfirmEvents();
+    }
+
+    public async ValueTask<decimal> Deposit(decimal amount)
+    {
+        RaiseEvent(new DepositEvent(amount));
+        await ConfirmEvents();
+        return State.Balance;
+    }
+
+    public async ValueTask<decimal> Withdraw(decimal amount)
+    {
+        if (TentativeState.Balance < amount)
+            throw new InvalidOperationException("Insufficient funds");
+
+        RaiseEvent(new WithdrawEvent(amount));
+        await ConfirmEvents();
+        return State.Balance;
+    }
+
+    public ValueTask<decimal> GetBalance() =>
+        ValueTask.FromResult(State.Balance);
+}
+```
+
+## Key Concepts
+
+### RaiseEvent and ConfirmEvents
+
+- `RaiseEvent(event)` — queues an event locally. The event is immediately applied to `TentativeState` but not yet persisted.
+- `RaiseEvents(events)` — queues multiple events atomically.
+- `ConfirmEvents()` — persists all queued events to storage. After this call, the events are durable and `State` reflects them.
+
+### Tentative vs. Confirmed State
+
+| Property | Description |
+|---|---|
+| `State` | The **confirmed** state — only includes events that have been persisted to storage. |
+| `TentativeState` | The **tentative** state — includes confirmed events plus any events raised but not yet confirmed. |
+| `Version` | The number of confirmed events applied to `State`. |
+
+```csharp
+// Before any events
+// State.Balance = 0, TentativeState.Balance = 0, Version = 0
+
+RaiseEvent(new DepositEvent(100));
+// State.Balance = 0, TentativeState.Balance = 100, Version = 0
+
+await ConfirmEvents();
+// State.Balance = 100, TentativeState.Balance = 100, Version = 1
+```
+
+<Aside type="tip">
+  Use `TentativeState` for reads within grain methods that have raised but not yet confirmed events. Use `State` when you need guaranteed consistency with persisted data.
+</Aside>
+
+### Conditional Events
+
+Check state before raising events to enforce business rules:
+
+```csharp
+public async ValueTask<bool> TryWithdraw(decimal amount)
+{
+    if (TentativeState.Balance < amount)
+        return false;
+
+    RaiseEvent(new WithdrawEvent(amount));
+    await ConfirmEvents();
+    return true;
+}
+```
+
+## Configuring a Log-Consistency Provider
+
+Journaled grains require a log-consistency provider. Orleans includes several built-in options. See [Log-Consistency Providers](/features/log-consistency-providers/) for details.
+
+```csharp
+siloBuilder.AddLogStorageBasedLogConsistencyProvider("LogStorage");
+siloBuilder.AddStateStorageBasedLogConsistencyProvider("StateStorage");
+```
+
+Assign a provider to a grain using the `[LogConsistencyProvider]` attribute:
+
+```csharp
+[LogConsistencyProvider(ProviderName = "LogStorage")]
+public class AccountGrain :
+    JournaledGrain<AccountState, AccountEvent>,
+    IAccountGrain
+{
+    // ...
+}
+```
+
+## Retrieving Event History
+
+You can retrieve the event log for auditing or debugging:
+
+```csharp
+public async ValueTask<List<AccountEvent>> GetHistory()
+{
+    var events = await RetrieveConfirmedEvents(0, Version);
+    return events.ToList();
+}
+```
+
+<Aside>
+  Event retrieval is only supported when using the **Log Storage** provider. The State Storage provider only stores snapshots, not individual events.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Log-Consistency Providers" icon="setting">
+    Learn about the built-in providers for event storage, state snapshots, and custom storage.
+    [Learn more](/features/log-consistency-providers/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Compare event sourcing with traditional state persistence.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="ACID Transactions" icon="pencil">
+    Coordinate multi-grain operations with distributed transactions.
+    [Learn more](/features/acid-transactions/)
+  </Card>
+  <Card title="Serialization Framework" icon="seti:json">
+    Learn about serializing events and state for storage.
+    [Learn more](/features/serialization-framework/)
+  </Card>
+</CardGrid>

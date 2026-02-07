@@ -1,0 +1,155 @@
+---
+title: Multi-Cluster / Geo-Distribution
+description: Federate multiple Orleans clusters across data centers for geo-distribution, with autonomous operation and eventual consistency.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Multi-cluster** support allows you to federate multiple Orleans clusters into a loosely connected network for geo-distribution across data centers. Each cluster operates autonomously and continues functioning even if other clusters are unreachable. This enables global applications with low-latency access from multiple regions.
+
+## Key Concepts
+
+- **Cluster** — an independent Orleans cluster running in a single data center or region.
+- **Multi-cluster network** — a federation of clusters that share grain state and coordinate placement.
+- **Geo-distributed grains** — grains that exist across multiple clusters, with state synchronized between them.
+- **Autonomous operation** — each cluster can serve requests independently, even during network partitions between clusters.
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  US-East     │     │  EU-West     │     │  Asia-East   │
+│  Cluster     │◄───►│  Cluster     │◄───►│  Cluster     │
+│  (Orleans)   │     │  (Orleans)   │     │  (Orleans)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+      ▲                    ▲                    ▲
+      │                    │                    │
+   Clients              Clients              Clients
+   (US-East)           (EU-West)           (Asia-East)
+```
+
+Each cluster:
+
+- Has its own `ClusterId` but shares the same `ServiceId`.
+- Runs its own silo membership and grain directory.
+- Synchronizes grain state with other clusters using log-consistency providers.
+
+## Configuration
+
+### Cluster Identity
+
+Each cluster needs a unique `ClusterId` but the same `ServiceId`:
+
+```csharp
+// US-East cluster
+siloBuilder.Configure<ClusterOptions>(options =>
+{
+    options.ClusterId = "us-east";
+    options.ServiceId = "my-global-app";
+});
+
+// EU-West cluster
+siloBuilder.Configure<ClusterOptions>(options =>
+{
+    options.ClusterId = "eu-west";
+    options.ServiceId = "my-global-app";
+});
+```
+
+### Multi-Cluster Configuration
+
+Configure the multi-cluster network with the list of participating clusters:
+
+```csharp
+siloBuilder.Configure<MultiClusterOptions>(options =>
+{
+    options.HasMultiClusterNetwork = true;
+    options.DefaultMultiCluster = new[]
+    {
+        "us-east", "eu-west", "asia-east"
+    };
+    options.MaxMultiClusterGateways = 2;
+});
+```
+
+| Option | Description |
+|---|---|
+| `HasMultiClusterNetwork` | Enable multi-cluster support. |
+| `DefaultMultiCluster` | List of cluster IDs participating in the network. |
+| `MaxMultiClusterGateways` | Max number of gateway silos per cluster for inter-cluster communication. |
+
+## Geo-Distributed Grains
+
+For grains that need to be accessible from multiple clusters, use [journaled grains](/features/journaled-grains/) with a log-consistency provider that supports multi-cluster replication:
+
+```csharp
+[LogConsistencyProvider(ProviderName = "CustomStorage")]
+public class GlobalUserGrain :
+    JournaledGrain<UserState, UserEvent>,
+    IGlobalUserGrain
+{
+    public async ValueTask UpdateProfile(string name)
+    {
+        RaiseEvent(new ProfileUpdatedEvent(name));
+        await ConfirmEvents();
+    }
+
+    public ValueTask<string> GetName() =>
+        ValueTask.FromResult(State.Name);
+}
+```
+
+### Consistency Model
+
+Multi-cluster grains use **eventual consistency**:
+
+- Writes are applied to the local cluster immediately.
+- Changes are propagated to other clusters asynchronously.
+- Each cluster can serve reads from its local state without cross-cluster communication.
+- Conflicts are resolved using the log-consistency provider's merge strategy.
+
+<Aside>
+  Eventual consistency means a read in one cluster might not reflect a recent write in another cluster. Design your application to tolerate this — use events and reconciliation patterns rather than strict reads.
+</Aside>
+
+## Single-Instance Grains
+
+For grains that should have only one activation across all clusters (not replicated), use the `[OneInstancePerCluster(false)]` attribute or configure global single-instance placement.
+
+## Use Cases
+
+- **Global user profiles** — users access their profile from the nearest region with low latency.
+- **Distributed caching** — cache data across regions with eventual synchronization.
+- **Multi-region game backends** — players interact within their region while global state synchronizes.
+- **Disaster recovery** — if one cluster goes down, others continue serving requests.
+
+## Trade-offs
+
+| Aspect | Single Cluster | Multi-Cluster |
+|---|---|---|
+| Latency | Higher for remote users | Low (nearest cluster) |
+| Consistency | Strong | Eventual |
+| Availability | Single region | Multi-region |
+| Complexity | Simple | Higher operational complexity |
+| State | Single source of truth | Replicated with merge semantics |
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Journaled Grains" icon="pencil">
+    Use event sourcing for multi-cluster state replication.
+    [Learn more](/features/journaled-grains/)
+  </Card>
+  <Card title="Log-Consistency Providers" icon="setting">
+    Configure providers that support multi-cluster replication.
+    [Learn more](/features/log-consistency-providers/)
+  </Card>
+  <Card title="Silo Clustering" icon="puzzle">
+    Configure clustering within each individual cluster.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Kubernetes Hosting" icon="puzzle">
+    Deploy multi-cluster Orleans on Kubernetes across regions.
+    [Learn more](/features/kubernetes-hosting/)
+  </Card>
+</CardGrid>

@@ -1,0 +1,192 @@
+---
+title: Metrics & Monitoring
+description: Orleans exposes metrics via System.Diagnostics.Metrics covering runtime statistics, grain activations, storage, streams, and transactions.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans exposes comprehensive **metrics** via `System.Diagnostics.Metrics`, using the `"Microsoft.Orleans"` meter. These metrics cover runtime statistics, grain activations, messaging, storage operations, streams, reminders, and transactions. They can be collected by any OpenTelemetry-compatible metrics backend.
+
+## Enabling Metrics Collection
+
+### Configure OpenTelemetry Metrics
+
+```bash
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.Prometheus.AspNetCore
+```
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddMeter("Microsoft.Orleans")
+            .AddAspNetCoreInstrumentation()
+            .AddPrometheusExporter();
+    });
+
+// Expose Prometheus endpoint
+app.MapPrometheusScrapingEndpoint();
+```
+
+## Available Metrics
+
+### Runtime Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `orleans-runtime.total-activations` | Gauge | Total number of grain activations on the silo |
+| `orleans-runtime.catalog-activation-count` | Gauge | Activations by grain type |
+| `orleans-runtime.messaging.sent-messages` | Counter | Messages sent by the silo |
+| `orleans-runtime.messaging.received-messages` | Counter | Messages received by the silo |
+| `orleans-runtime.messaging.rejected-messages` | Counter | Messages rejected (e.g., load shedding) |
+
+### Grain Call Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `orleans-runtime.grain.call-duration` | Histogram | Duration of grain method calls |
+| `orleans-runtime.grain.call-failed` | Counter | Failed grain method calls |
+
+### Storage Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `orleans-runtime.storage.read-count` | Counter | Number of state read operations |
+| `orleans-runtime.storage.write-count` | Counter | Number of state write operations |
+| `orleans-runtime.storage.clear-count` | Counter | Number of state clear operations |
+| `orleans-runtime.storage.read-errors` | Counter | Failed read operations |
+| `orleans-runtime.storage.write-errors` | Counter | Failed write operations |
+
+### Streaming Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `orleans-runtime.streaming.sent` | Counter | Stream events sent |
+| `orleans-runtime.streaming.received` | Counter | Stream events received |
+| `orleans-runtime.streaming.failed-deliveries` | Counter | Failed stream event deliveries |
+
+### Reminder Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `orleans-runtime.reminders.active` | Gauge | Active reminders on the silo |
+| `orleans-runtime.reminders.ticks-delivered` | Counter | Reminder ticks delivered |
+
+## Exporting to Backends
+
+### Prometheus
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddMeter("Microsoft.Orleans")
+            .AddPrometheusExporter();
+    });
+```
+
+### OTLP (Grafana, Datadog, etc.)
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddMeter("Microsoft.Orleans")
+            .AddOtlpExporter(options =>
+            {
+                options.Endpoint = new Uri("http://localhost:4317");
+            });
+    });
+```
+
+### Azure Monitor
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddMeter("Microsoft.Orleans")
+            .AddAzureMonitorMetricExporter(options =>
+            {
+                options.ConnectionString = "InstrumentationKey=...";
+            });
+    });
+```
+
+## Custom Application Metrics
+
+Add application-specific metrics alongside Orleans runtime metrics:
+
+```csharp
+public class OrderGrain : Grain, IOrderGrain
+{
+    private static readonly Meter Meter = new("MyApp.Orders");
+    private static readonly Counter<long> OrdersPlaced =
+        Meter.CreateCounter<long>("orders.placed");
+    private static readonly Histogram<double> OrderValue =
+        Meter.CreateHistogram<double>("orders.value", "USD");
+
+    public async ValueTask PlaceOrder(OrderRequest request)
+    {
+        // Business logic...
+
+        OrdersPlaced.Add(1,
+            new KeyValuePair<string, object?>("region", request.Region));
+        OrderValue.Record(request.Total);
+    }
+}
+```
+
+Register the custom meter:
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddMeter("Microsoft.Orleans")
+            .AddMeter("MyApp.Orders");
+    });
+```
+
+## Health Checks
+
+Orleans includes built-in health checks for ASP.NET Core:
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck<SiloHealthCheck>("silo-health")
+    .AddCheck<ClusterHealthCheck>("cluster-health");
+
+app.MapHealthChecks("/health");
+```
+
+<Aside type="tip">
+  Combine metrics with [distributed tracing](/features/distributed-tracing/) for full observability. Metrics show aggregate health while traces help diagnose individual request issues.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Distributed Tracing" icon="open-book">
+    Add end-to-end request tracing with OpenTelemetry.
+    [Learn more](/features/distributed-tracing/)
+  </Card>
+  <Card title="Orleans Dashboard" icon="setting">
+    Real-time web-based monitoring UI for your cluster.
+    [Learn more](/features/orleans-dashboard/)
+  </Card>
+  <Card title="Load Shedding" icon="setting">
+    Monitor load shedding events and protect against overload.
+    [Learn more](/features/load-shedding/)
+  </Card>
+  <Card title="Grain Call Filters" icon="random">
+    Add custom metrics via grain call interceptors.
+    [Learn more](/features/grain-call-filters/)
+  </Card>
+</CardGrid>

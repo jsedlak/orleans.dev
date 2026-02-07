@@ -1,0 +1,192 @@
+---
+title: ACID Transactions
+description: Coordinate multi-grain operations with distributed ACID transactions in Orleans — atomicity, consistency, isolation, and durability.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans supports **distributed ACID transactions** that span multiple grains and storage providers. Transactions guarantee atomicity (all-or-nothing), consistency, isolation (reads see a consistent snapshot), and durability. This is built on top of the grain persistence model and requires no external transaction coordinator.
+
+## How It Works
+
+1. A grain method is marked with `[Transaction]` to participate in a transaction.
+2. Transactional state is injected using `ITransactionalState<T>` instead of `IPersistentState<T>`.
+3. Orleans manages the transaction lifecycle — begin, commit, or rollback — automatically.
+4. Multiple grains can participate in the same transaction through grain-to-grain calls within a `[Transaction]` scope.
+
+## Defining Transactional State
+
+Transactional grains use `ITransactionalState<T>` for state that participates in transactions:
+
+```csharp
+[GenerateSerializer]
+public class BankAccountState
+{
+    [Id(0)]
+    public decimal Balance { get; set; }
+}
+```
+
+## Implementing a Transactional Grain
+
+```csharp
+public interface IBankAccountGrain : IGrainWithStringKey
+{
+    [Transaction(TransactionOption.CreateOrJoin)]
+    Task<decimal> GetBalance();
+
+    [Transaction(TransactionOption.CreateOrJoin)]
+    Task Deposit(decimal amount);
+
+    [Transaction(TransactionOption.CreateOrJoin)]
+    Task Withdraw(decimal amount);
+}
+
+public class BankAccountGrain : Grain, IBankAccountGrain
+{
+    private readonly ITransactionalState<BankAccountState> _state;
+
+    public BankAccountGrain(
+        [TransactionalState("account", "TransactionStore")]
+        ITransactionalState<BankAccountState> state)
+    {
+        _state = state;
+    }
+
+    public Task<decimal> GetBalance() =>
+        _state.PerformRead(state => state.Balance);
+
+    public Task Deposit(decimal amount) =>
+        _state.PerformUpdate(state => state.Balance += amount);
+
+    public Task Withdraw(decimal amount) =>
+        _state.PerformUpdate(state =>
+        {
+            if (state.Balance < amount)
+                throw new InvalidOperationException("Insufficient funds");
+            state.Balance -= amount;
+        });
+}
+```
+
+### State Operations
+
+| Method | Description |
+|---|---|
+| `PerformRead(Func<TState, TResult>)` | Read state within the transaction. |
+| `PerformUpdate(Action<TState>)` | Modify state within the transaction. |
+
+<Aside>
+  Always use `PerformRead` and `PerformUpdate` to access transactional state. Direct access to the state object outside these methods bypasses transaction isolation.
+</Aside>
+
+## Transaction Options
+
+The `[Transaction]` attribute controls how a grain method participates in transactions:
+
+| Option | Behavior |
+|---|---|
+| `TransactionOption.CreateOrJoin` | Join an existing transaction or create a new one if none exists. Most common. |
+| `TransactionOption.Create` | Always create a new transaction. Fails if already in a transaction. |
+| `TransactionOption.Join` | Join an existing transaction. Fails if no transaction is active. |
+| `TransactionOption.Supported` | Join a transaction if one exists, but also works without one. |
+| `TransactionOption.NotAllowed` | Fails if called within a transaction. |
+
+## Multi-Grain Transactions
+
+Transactions automatically span multiple grains when one transactional grain calls another:
+
+```csharp
+public interface ITransferGrain : IGrainWithIntegerKey
+{
+    [Transaction(TransactionOption.Create)]
+    Task Transfer(string from, string to, decimal amount);
+}
+
+public class TransferGrain : Grain, ITransferGrain
+{
+    public async Task Transfer(string from, string to, decimal amount)
+    {
+        var fromAccount = GrainFactory.GetGrain<IBankAccountGrain>(from);
+        var toAccount = GrainFactory.GetGrain<IBankAccountGrain>(to);
+
+        // Both operations run in the same transaction
+        await fromAccount.Withdraw(amount);
+        await toAccount.Deposit(amount);
+
+        // If either fails, both are rolled back
+    }
+}
+```
+
+<Aside type="tip">
+  The top-level method uses `TransactionOption.Create` to start the transaction, while participant methods use `TransactionOption.CreateOrJoin` to join it.
+</Aside>
+
+## Configuring Transaction Storage
+
+Transactions require a transaction-aware storage provider:
+
+```csharp
+siloBuilder
+    .AddAzureTableTransactionalStateStorage("TransactionStore", options =>
+    {
+        options.TableServiceClient = new TableServiceClient(connectionString);
+    })
+    .UseTransactions();
+```
+
+Memory-based storage for development:
+
+```csharp
+siloBuilder
+    .AddMemoryGrainStorage("TransactionStore")
+    .UseTransactions();
+```
+
+<Aside type="caution">
+  `UseTransactions()` must be called on the silo builder to enable the transaction system. Without it, transactional grain methods will fail at runtime.
+</Aside>
+
+## Error Handling
+
+- If any operation within a transaction throws, the entire transaction is rolled back.
+- Transient failures (network issues, timeouts) may cause the transaction to be retried automatically.
+- On commit failure, an `OrleansTransactionException` is thrown to the caller.
+
+```csharp
+try
+{
+    var transfer = grains.GetGrain<ITransferGrain>(0);
+    await transfer.Transfer("alice", "bob", 100m);
+}
+catch (OrleansTransactionAbortedException ex)
+{
+    // Transaction was rolled back — retry or report
+}
+catch (OrleansTransactionException ex)
+{
+    // Transaction failed for another reason
+}
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Persistence" icon="pencil">
+    Learn about non-transactional state persistence with `IPersistentState`.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="Reentrancy & Request Scheduling" icon="random">
+    Understand concurrency control within transactional grains.
+    [Learn more](/features/reentrancy-and-request-scheduling/)
+  </Card>
+  <Card title="Journaled Grains" icon="pencil">
+    Compare transactions with event sourcing patterns.
+    [Learn more](/features/journaled-grains/)
+  </Card>
+  <Card title="Serialization Framework" icon="seti:json">
+    Ensure transactional state types are properly serializable.
+    [Learn more](/features/serialization-framework/)
+  </Card>
+</CardGrid>

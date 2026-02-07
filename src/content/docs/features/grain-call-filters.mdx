@@ -1,0 +1,240 @@
+---
+title: Grain Call Filters
+description: Intercept incoming and outgoing grain calls with IIncomingGrainCallFilter and IOutgoingGrainCallFilter for authorization, logging, and telemetry.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Grain call filters** (also called interceptors) let you intercept grain method calls for cross-cutting concerns like authorization, logging, telemetry, error handling, and performance monitoring. Orleans supports both **incoming** filters (on the grain receiving the call) and **outgoing** filters (on the grain making the call).
+
+## Incoming Grain Call Filters
+
+Incoming filters run on the silo hosting the target grain, before and after the grain method executes.
+
+### Implementing an Incoming Filter
+
+Implement `IIncomingGrainCallFilter`:
+
+```csharp
+public class LoggingIncomingFilter : IIncomingGrainCallFilter
+{
+    private readonly ILogger<LoggingIncomingFilter> _logger;
+
+    public LoggingIncomingFilter(ILogger<LoggingIncomingFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task Invoke(IIncomingGrainCallContext context)
+    {
+        var grainType = context.TargetContext.GrainId.Type;
+        var method = context.MethodName;
+
+        _logger.LogInformation("Calling {Grain}.{Method}", grainType, method);
+
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            await context.Invoke(); // Call the grain method
+            _logger.LogInformation(
+                "{Grain}.{Method} completed in {Elapsed}ms",
+                grainType, method, stopwatch.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "{Grain}.{Method} failed after {Elapsed}ms",
+                grainType, method, stopwatch.ElapsedMilliseconds);
+            throw; // Re-throw to propagate the error
+        }
+    }
+}
+```
+
+### Registering Silo-Wide
+
+Register the filter in the silo's dependency injection container:
+
+```csharp
+siloBuilder.AddIncomingGrainCallFilter<LoggingIncomingFilter>();
+```
+
+### Per-Grain Filters
+
+A grain can implement `IIncomingGrainCallFilter` directly to add a filter that only applies to that grain type:
+
+```csharp
+public class SecureGrain : Grain, ISecureGrain, IIncomingGrainCallFilter
+{
+    public async Task Invoke(IIncomingGrainCallContext context)
+    {
+        var userId = RequestContext.Get("UserId") as string;
+        if (string.IsNullOrEmpty(userId))
+            throw new UnauthorizedAccessException("No user context");
+
+        await context.Invoke();
+    }
+
+    public ValueTask<string> GetSecretData() =>
+        ValueTask.FromResult("classified");
+}
+```
+
+## Outgoing Grain Call Filters
+
+Outgoing filters run on the silo making a call to another grain, before the message is sent.
+
+### Implementing an Outgoing Filter
+
+Implement `IOutgoingGrainCallFilter`:
+
+```csharp
+public class TracingOutgoingFilter : IOutgoingGrainCallFilter
+{
+    public async Task Invoke(IOutgoingGrainCallContext context)
+    {
+        // Add trace context before the call
+        RequestContext.Set("TraceId",
+            RequestContext.Get("TraceId") ?? Guid.NewGuid().ToString());
+
+        await context.Invoke();
+    }
+}
+```
+
+### Registering
+
+```csharp
+siloBuilder.AddOutgoingGrainCallFilter<TracingOutgoingFilter>();
+```
+
+## Filter Context API
+
+### IIncomingGrainCallContext
+
+| Property/Method | Description |
+|---|---|
+| `Invoke()` | Calls the next filter or the grain method. Must be called exactly once. |
+| `MethodName` | The name of the grain method being called. |
+| `TargetContext` | The `IGrainContext` of the target grain. |
+| `Request` | The incoming request object with method arguments. |
+| `Result` | The return value after `Invoke()` completes. |
+
+### IOutgoingGrainCallContext
+
+| Property/Method | Description |
+|---|---|
+| `Invoke()` | Sends the request to the target grain. Must be called exactly once. |
+| `MethodName` | The name of the method being called. |
+| `Request` | The outgoing request object with method arguments. |
+| `Result` | The return value after `Invoke()` completes. |
+
+## Common Patterns
+
+### Authorization
+
+```csharp
+public class AuthFilter : IIncomingGrainCallFilter
+{
+    public async Task Invoke(IIncomingGrainCallContext context)
+    {
+        var role = RequestContext.Get("Role") as string;
+        var method = context.MethodName;
+
+        if (method.StartsWith("Admin") && role != "admin")
+            throw new UnauthorizedAccessException(
+                $"Method {method} requires admin role");
+
+        await context.Invoke();
+    }
+}
+```
+
+### Performance Monitoring
+
+```csharp
+public class MetricsFilter : IIncomingGrainCallFilter
+{
+    private static readonly Meter Meter = new("Orleans.App");
+    private static readonly Histogram<double> Duration =
+        Meter.CreateHistogram<double>("grain.call.duration", "ms");
+
+    public async Task Invoke(IIncomingGrainCallContext context)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            await context.Invoke();
+        }
+        finally
+        {
+            Duration.Record(stopwatch.Elapsed.TotalMilliseconds,
+                new KeyValuePair<string, object?>("method", context.MethodName));
+        }
+    }
+}
+```
+
+### Exception Handling
+
+```csharp
+public class ExceptionFilter : IIncomingGrainCallFilter
+{
+    private readonly ILogger<ExceptionFilter> _logger;
+
+    public ExceptionFilter(ILogger<ExceptionFilter> logger) =>
+        _logger = logger;
+
+    public async Task Invoke(IIncomingGrainCallContext context)
+    {
+        try
+        {
+            await context.Invoke();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Unhandled error in {Method}",
+                context.MethodName);
+            throw;
+        }
+    }
+}
+```
+
+## Filter Execution Order
+
+When multiple filters are registered, they execute in registration order, forming a pipeline:
+
+```
+Request → Filter1 → Filter2 → Filter3 → Grain Method
+Response ← Filter1 ← Filter2 ← Filter3 ← Grain Method
+```
+
+Per-grain filters execute after silo-wide filters.
+
+<Aside type="tip">
+  Call `context.Invoke()` exactly once in each filter. Not calling it skips the grain method entirely. Calling it multiple times will produce errors.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Services" icon="puzzle">
+    Run infrastructure grains on every silo from startup to shutdown.
+    [Learn more](/features/grain-services/)
+  </Card>
+  <Card title="Distributed Tracing" icon="open-book">
+    Full OpenTelemetry integration for distributed tracing.
+    [Learn more](/features/distributed-tracing/)
+  </Card>
+  <Card title="Request Context" icon="add-document">
+    Flow metadata across grain calls for use in filters.
+    [Learn more](/features/request-context/)
+  </Card>
+  <Card title="Metrics & Monitoring" icon="document">
+    Track grain call performance with metrics.
+    [Learn more](/features/metrics-and-monitoring/)
+  </Card>
+</CardGrid>

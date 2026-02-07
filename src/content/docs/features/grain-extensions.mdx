@@ -1,0 +1,144 @@
+---
+title: Grain Extensions
+description: Add new functionality to grains at runtime using IGrainExtension and dependency injection, without modifying the original grain class.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Grain extensions** let you attach additional behavior to grains without modifying their class definitions. An extension is a separate component that implements `IGrainExtension` and is resolved through dependency injection. Extensions are ideal for cross-cutting concerns like auditing, caching layers, or protocol-specific behavior that you want to add to grains dynamically.
+
+## How It Works
+
+1. Define an extension interface that extends `IGrainExtension`.
+2. Implement the extension.
+3. Register the extension in the DI container.
+4. Access the extension from a grain reference using `AsReference<T>()` or from inside the grain via `GetGrainExtension<T>()`.
+
+## Defining an Extension
+
+An extension interface must extend `IGrainExtension`, which itself extends `IAddressable`:
+
+```csharp
+public interface IAuditExtension : IGrainExtension
+{
+    ValueTask<List<AuditEntry>> GetAuditLog();
+    ValueTask RecordAction(string action);
+}
+
+[GenerateSerializer]
+public record AuditEntry
+{
+    [Id(0)]
+    public string Action { get; init; } = "";
+
+    [Id(1)]
+    public DateTime Timestamp { get; init; }
+}
+```
+
+## Implementing an Extension
+
+The extension implementation receives `IGrainContext` to access the grain it is attached to:
+
+```csharp
+public class AuditExtension : IAuditExtension
+{
+    private readonly IGrainContext _context;
+    private readonly List<AuditEntry> _log = new();
+
+    public AuditExtension(IGrainContext context)
+    {
+        _context = context;
+    }
+
+    public ValueTask<List<AuditEntry>> GetAuditLog() =>
+        ValueTask.FromResult(_log.ToList());
+
+    public ValueTask RecordAction(string action)
+    {
+        _log.Add(new AuditEntry
+        {
+            Action = action,
+            Timestamp = DateTime.UtcNow
+        });
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+## Registering an Extension
+
+Register the extension in the silo's dependency injection container using `AddGrainExtension`:
+
+```csharp
+siloBuilder.AddGrainExtension<IAuditExtension, AuditExtension>();
+```
+
+This tells Orleans to create an `AuditExtension` instance for any grain that requests the `IAuditExtension` extension.
+
+## Using an Extension from Within a Grain
+
+A grain can access its own extensions using `GetGrainExtension<T>()` on its context:
+
+```csharp
+public class OrderGrain : Grain, IOrderGrain
+{
+    public async ValueTask PlaceOrder(OrderRequest request)
+    {
+        // Business logic...
+
+        // Record the action via the extension
+        var audit = this.AsReference<IAuditExtension>();
+        await audit.RecordAction($"Order placed: {request.OrderId}");
+    }
+}
+```
+
+## Using an Extension from a Client
+
+Callers can cast any grain reference to an extension interface:
+
+```csharp
+app.MapGet("/orders/{id}/audit", async (IGrainFactory grains, string id) =>
+{
+    var grain = grains.GetGrain<IOrderGrain>(id);
+    var audit = grain.AsReference<IAuditExtension>();
+    var log = await audit.GetAuditLog();
+    return Results.Ok(log);
+});
+```
+
+<Aside>
+  The extension is invoked on the same activation as the grain it is attached to. Extension methods respect the same single-threaded execution model as regular grain methods.
+</Aside>
+
+## Extension Lifecycle
+
+- Extensions are created **lazily** — the first time they are accessed on a grain.
+- Extensions live for the lifetime of the grain activation.
+- If the extension class implements `IDisposable` or `IAsyncDisposable`, it is disposed when the grain deactivates.
+
+<Aside type="tip">
+  Extensions are scoped to a specific grain activation. Each grain activation gets its own instance of each extension.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Call Filters" icon="random">
+    Intercept grain calls for logging, authorization, and telemetry.
+    [Learn more](/features/grain-call-filters/)
+  </Card>
+  <Card title="Grain Services" icon="puzzle">
+    Run infrastructure grains on every silo from startup to shutdown.
+    [Learn more](/features/grain-services/)
+  </Card>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of defining and calling grains.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Add durable state to grains so data survives deactivation and restarts.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+</CardGrid>

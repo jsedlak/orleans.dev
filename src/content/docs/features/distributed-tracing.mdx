@@ -1,0 +1,181 @@
+---
+title: Distributed Tracing (OpenTelemetry)
+description: Full distributed tracing support for grain calls, timer callbacks, and streaming operations using OpenTelemetry in Orleans.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans provides built-in **distributed tracing** using [OpenTelemetry](https://opentelemetry.io/). Every grain call, timer callback, and streaming operation is instrumented with trace context, enabling end-to-end visibility across grain boundaries and silos.
+
+## Enabling Distributed Tracing
+
+### 1. Add Activity Propagation
+
+Enable trace context propagation in the silo:
+
+```csharp
+siloBuilder.AddActivityPropagation();
+```
+
+This ensures that `Activity` (trace) context flows with every grain call.
+
+### 2. Configure OpenTelemetry
+
+Add OpenTelemetry packages and configure the tracing pipeline:
+
+```bash
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.Console
+```
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddSource("Microsoft.Orleans.Runtime")
+            .AddSource("Microsoft.Orleans.Application")
+            .SetResourceBuilder(ResourceBuilder.CreateDefault()
+                .AddService("MyOrleansApp"))
+            .AddConsoleExporter(); // or Jaeger, Zipkin, OTLP, etc.
+    });
+```
+
+### Activity Sources
+
+Orleans emits traces from these `ActivitySource` names:
+
+| Source | Traces |
+|---|---|
+| `Microsoft.Orleans.Runtime` | Grain calls, timer callbacks, reminder ticks, streaming |
+| `Microsoft.Orleans.Application` | Application-level activities (opt-in) |
+
+## What Gets Traced
+
+Once enabled, Orleans automatically traces:
+
+- **Grain method calls** — each call creates a span with the grain type and method name.
+- **Timer callbacks** — timer ticks are traced as child spans of the grain.
+- **Reminder callbacks** — reminder ticks create trace spans.
+- **Stream operations** — producing and consuming stream events are traced.
+- **Cross-silo calls** — trace context propagates across silo boundaries.
+
+### Trace Attributes
+
+Each span includes attributes for:
+
+| Attribute | Description |
+|---|---|
+| `rpc.system` | `"orleans"` |
+| `rpc.service` | Grain interface name |
+| `rpc.method` | Method name |
+| `orleans.grain.type` | Full grain type name |
+| `orleans.grain.id` | Grain identity key |
+
+## Exporting Traces
+
+### Jaeger
+
+```bash
+dotnet add package OpenTelemetry.Exporter.Jaeger
+```
+
+```csharp
+tracing.AddJaegerExporter(options =>
+{
+    options.AgentHost = "localhost";
+    options.AgentPort = 6831;
+});
+```
+
+### OTLP (OpenTelemetry Protocol)
+
+```bash
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+```csharp
+tracing.AddOtlpExporter(options =>
+{
+    options.Endpoint = new Uri("http://localhost:4317");
+});
+```
+
+### Azure Monitor
+
+```bash
+dotnet add package Azure.Monitor.OpenTelemetry.Exporter
+```
+
+```csharp
+tracing.AddAzureMonitorTraceExporter(options =>
+{
+    options.ConnectionString = "InstrumentationKey=...";
+});
+```
+
+## Custom Traces
+
+Add custom spans within grain methods for application-specific tracing:
+
+```csharp
+public class OrderGrain : Grain, IOrderGrain
+{
+    private static readonly ActivitySource Source = new("MyApp.Orders");
+
+    public async ValueTask<OrderResult> PlaceOrder(OrderRequest request)
+    {
+        using var activity = Source.StartActivity("PlaceOrder.Validate");
+        // Validation logic
+        activity?.SetTag("order.id", request.OrderId);
+
+        using var processActivity = Source.StartActivity("PlaceOrder.Process");
+        // Processing logic
+
+        return new OrderResult { Success = true };
+    }
+}
+```
+
+<Aside type="tip">
+  Register your custom `ActivitySource` names with OpenTelemetry using `AddSource("MyApp.Orders")` so they're included in the trace pipeline.
+</Aside>
+
+## Correlating with HTTP Requests
+
+When Orleans is co-hosted with ASP.NET Core, traces flow automatically from HTTP requests through grain calls:
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddAspNetCoreInstrumentation()  // HTTP request spans
+            .AddSource("Microsoft.Orleans.Runtime")  // Grain call spans
+            .AddHttpClientInstrumentation()  // Outgoing HTTP spans
+            .AddOtlpExporter();
+    });
+```
+
+The resulting trace shows the full request path: HTTP → Grain A → Grain B → External API.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Metrics & Monitoring" icon="document">
+    Track runtime metrics alongside traces for full observability.
+    [Learn more](/features/metrics-and-monitoring/)
+  </Card>
+  <Card title="Orleans Dashboard" icon="setting">
+    Real-time web-based monitoring of cluster health and grain activity.
+    [Learn more](/features/orleans-dashboard/)
+  </Card>
+  <Card title="Grain Call Filters" icon="random">
+    Add custom telemetry via grain call interceptors.
+    [Learn more](/features/grain-call-filters/)
+  </Card>
+  <Card title="Request Context" icon="add-document">
+    Flow custom metadata like correlation IDs across grain calls.
+    [Learn more](/features/request-context/)
+  </Card>
+</CardGrid>

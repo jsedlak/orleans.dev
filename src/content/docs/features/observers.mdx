@@ -1,0 +1,203 @@
+---
+title: Observers
+description: Enable pub/sub notification patterns where grains push updates to connected clients or other grains without polling.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Observers** provide a pub/sub notification mechanism in Orleans. They allow grains to push updates to clients or other grains without the subscriber needing to poll. Observers are useful for real-time scenarios like chat applications, live dashboards, and event notifications.
+
+<Aside>
+  Observers are a lower-level mechanism compared to [Orleans Streams](/features/streaming/). For most pub/sub scenarios, streams are recommended because they handle durability, recovery, and implicit subscriptions. Use observers when you need direct, fine-grained control over notification delivery.
+</Aside>
+
+## How It Works
+
+1. Define an **observer interface** that extends `IGrainObserver`.
+2. The **subscribing grain or client** implements the observer interface.
+3. The **publishing grain** maintains a list of subscribed observers and notifies them when events occur.
+
+## Defining an Observer Interface
+
+Observer interfaces extend `IGrainObserver`. Methods on observer interfaces must return `void`, `Task`, `ValueTask`, or their generic equivalents and should be marked `[OneWay]` for fire-and-forget delivery:
+
+```csharp
+public interface IChatObserver : IGrainObserver
+{
+    [OneWay]
+    void ReceiveMessage(string sender, string message);
+}
+```
+
+<Aside type="tip">
+  `[OneWay]` means the caller does not wait for the observer to process the notification. This is the recommended pattern for observer methods since the publisher shouldn't block on subscriber processing.
+</Aside>
+
+## Implementing the Publishing Grain
+
+The grain that publishes notifications manages an `ObserverManager<T>` to track subscribers:
+
+```csharp
+public interface IChatRoomGrain : IGrainWithStringKey
+{
+    ValueTask Subscribe(IChatObserver observer);
+    ValueTask Unsubscribe(IChatObserver observer);
+    ValueTask SendMessage(string sender, string message);
+}
+
+public class ChatRoomGrain : Grain, IChatRoomGrain
+{
+    private readonly ObserverManager<IChatObserver> _observers;
+
+    public ChatRoomGrain()
+    {
+        // Observers expire after 5 minutes if not re-subscribed
+        _observers = new ObserverManager<IChatObserver>(
+            TimeSpan.FromMinutes(5), logger: null!);
+    }
+
+    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _observers.GetLogger(this.GetServiceProvider()
+            .GetRequiredService<ILoggerFactory>());
+        return base.OnActivateAsync(cancellationToken);
+    }
+
+    public ValueTask Subscribe(IChatObserver observer)
+    {
+        _observers.Subscribe(observer, observer);
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask Unsubscribe(IChatObserver observer)
+    {
+        _observers.Unsubscribe(observer);
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask SendMessage(string sender, string message)
+    {
+        _observers.Notify(obs => obs.ReceiveMessage(sender, message));
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+### ObserverManager
+
+`ObserverManager<T>` is a utility class that handles:
+
+- **Subscription tracking** — maintains a set of active observers.
+- **Expiration** — automatically removes observers that haven't re-subscribed within the configured timeout.
+- **Notification** — broadcasts to all active observers, catching and logging failures.
+
+## Subscribing from a Client
+
+Clients create observer references using `IGrainFactory.CreateObjectReference<T>`:
+
+```csharp
+public class ChatClient : IChatObserver
+{
+    private readonly IGrainFactory _grainFactory;
+
+    public ChatClient(IGrainFactory grainFactory)
+    {
+        _grainFactory = grainFactory;
+    }
+
+    public async Task JoinRoom(string roomName)
+    {
+        var room = _grainFactory.GetGrain<IChatRoomGrain>(roomName);
+        var observerRef = _grainFactory.CreateObjectReference<IChatObserver>(this);
+        await room.Subscribe(observerRef);
+    }
+
+    public void ReceiveMessage(string sender, string message)
+    {
+        Console.WriteLine($"[{sender}]: {message}");
+    }
+}
+```
+
+<Aside type="caution">
+  Observer references are tied to the process that created them. If the client disconnects or restarts, the observer reference becomes invalid. The publishing grain should handle failed deliveries gracefully — `ObserverManager` does this automatically by removing failed observers.
+</Aside>
+
+## Subscribing from Another Grain
+
+Grains can also subscribe as observers. The subscribing grain implements the observer interface and passes itself:
+
+```csharp
+public class LoggingGrain : Grain, ILoggingGrain, IChatObserver
+{
+    public async Task StartLogging(string roomName)
+    {
+        var room = GrainFactory.GetGrain<IChatRoomGrain>(roomName);
+        var observerRef = GrainFactory
+            .CreateObjectReference<IChatObserver>(this);
+        await room.Subscribe(observerRef);
+    }
+
+    public void ReceiveMessage(string sender, string message)
+    {
+        // Log the message
+    }
+}
+```
+
+## Keeping Subscriptions Alive
+
+Since `ObserverManager` expires inactive subscriptions, long-lived subscribers should periodically re-subscribe. Use a [timer](/features/timers-and-reminders/) to renew subscriptions:
+
+```csharp
+public override Task OnActivateAsync(CancellationToken cancellationToken)
+{
+    RegisterGrainTimer(
+        callback: static async (state, ct) =>
+        {
+            var room = state.GrainFactory.GetGrain<IChatRoomGrain>("general");
+            var self = state.GrainFactory
+                .CreateObjectReference<IChatObserver>(state);
+            await room.Subscribe(self);
+        },
+        state: this,
+        options: new GrainTimerCreationOptions
+        {
+            DueTime = TimeSpan.FromMinutes(3),
+            Period = TimeSpan.FromMinutes(3)
+        });
+
+    return base.OnActivateAsync(cancellationToken);
+}
+```
+
+## Observers vs. Streams
+
+| Feature | Observers | Streams |
+|---|---|---|
+| Delivery model | Direct push | Via stream provider |
+| Durability | Not durable | Provider-dependent (can be durable) |
+| Recovery | Manual re-subscription | Automatic (implicit subscriptions) |
+| Scale | Bounded by observer list size | Scales with stream provider |
+| Use case | Small fan-out, real-time | Large fan-out, event sourcing, processing pipelines |
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Streaming" icon="right-arrow">
+    Build reactive, event-driven pipelines with Orleans Streams.
+    [Learn more](/features/streaming/)
+  </Card>
+  <Card title="Request/Response & One-Way" icon="document">
+    Understand the messaging patterns available in Orleans.
+    [Learn more](/features/request-response-and-one-way/)
+  </Card>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of grains and the virtual actor model.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="Timers and Reminders" icon="setting">
+    Schedule periodic work inside grains.
+    [Learn more](/features/timers-and-reminders/)
+  </Card>
+</CardGrid>

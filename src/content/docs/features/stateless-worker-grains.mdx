@@ -1,0 +1,165 @@
+---
+title: Stateless Worker Grains
+description: Use stateless worker grains in Orleans for auto-scaled, locally dispatched, stateless computation across the cluster.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Stateless worker grains** are a special type of grain optimized for stateless, parallelizable work. Unlike normal grains — which have a single activation per identity across the cluster — stateless workers allow **multiple concurrent activations** on every silo, enabling local dispatch and auto-scaling.
+
+## Key Properties
+
+| Property | Regular Grain | Stateless Worker |
+|---|---|---|
+| Activations per identity | 1 across the cluster | Multiple per silo |
+| Dispatch | Routed to single silo via grain directory | Dispatched locally on the calling silo |
+| Scaling | Fixed single activation | Auto-scales based on load |
+| State | Can hold persistent and in-memory state | Should hold no state (or only caches) |
+| Concurrency | Single-threaded per activation | Multiple activations process in parallel |
+
+## Declaring a Stateless Worker
+
+Apply the `[StatelessWorker]` attribute to the grain class:
+
+```csharp
+[StatelessWorker]
+public class ValidationGrain : Grain, IValidationGrain
+{
+    public ValueTask<bool> ValidateOrder(OrderRequest request)
+    {
+        var isValid = request.Items.Count > 0
+            && request.CustomerId != Guid.Empty
+            && request.Items.All(i => i.Quantity > 0);
+
+        return ValueTask.FromResult(isValid);
+    }
+}
+```
+
+The interface is defined normally — callers don't need to know the grain is a stateless worker:
+
+```csharp
+public interface IValidationGrain : IGrainWithIntegerKey
+{
+    ValueTask<bool> ValidateOrder(OrderRequest request);
+}
+```
+
+### Limiting Concurrent Activations
+
+By default, the runtime creates as many activations as needed per silo. You can cap this with the `maxLocalWorkers` parameter:
+
+```csharp
+// At most 4 activations per silo
+[StatelessWorker(maxLocalWorkers: 4)]
+public class ThrottledWorkerGrain : Grain, IThrottledWorkerGrain
+{
+    // ...
+}
+```
+
+<Aside type="tip">
+  Setting `maxLocalWorkers` is useful when the worker accesses a limited external resource (like a connection pool) and you want to prevent overloading it.
+</Aside>
+
+## How Dispatching Works
+
+When a grain on Silo A calls a stateless worker, Orleans dispatches the call **locally on Silo A** instead of routing it through the grain directory to a remote silo. This avoids a network hop and reduces latency.
+
+<Steps>
+1. **Caller invokes the stateless worker** via `IGrainFactory.GetGrain<T>(key)`.
+
+2. **Local dispatch** — the runtime checks for an idle local activation. If one is available, it processes the message immediately.
+
+3. **Auto-scale** — if all local activations are busy, the runtime creates a new one (up to the `maxLocalWorkers` limit).
+
+4. **Overflow** — if the local limit is reached, excess messages may be routed to other silos.
+</Steps>
+
+## Common Use Cases
+
+### Computation and Validation
+
+Offload CPU-bound work that doesn't need state:
+
+```csharp
+[StatelessWorker]
+public class ImageProcessorGrain : Grain, IImageProcessorGrain
+{
+    public ValueTask<byte[]> GenerateThumbnail(byte[] imageData, int width, int height)
+    {
+        var thumbnail = ImageLibrary.Resize(imageData, width, height);
+        return ValueTask.FromResult(thumbnail);
+    }
+}
+```
+
+### Gateway and Routing
+
+Use stateless workers as a front-door to fan out requests to the correct stateful grains:
+
+```csharp
+[StatelessWorker]
+public class RouterGrain : Grain, IRouterGrain
+{
+    public async ValueTask HandleEvent(DeviceEvent evt)
+    {
+        // Route to the correct device grain based on the event
+        var device = GrainFactory.GetGrain<IDeviceGrain>(evt.DeviceId);
+        await device.ProcessEvent(evt);
+    }
+}
+```
+
+### Caching with Local State
+
+While stateless workers shouldn't hold persistent state, they can hold read-only caches that are rebuilt on activation:
+
+```csharp
+[StatelessWorker]
+public class ConfigGrain : Grain, IConfigGrain
+{
+    private Dictionary<string, string> _config = new();
+
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _config = await LoadConfigFromSourceAsync();
+        await base.OnActivateAsync(cancellationToken);
+    }
+
+    public ValueTask<string?> GetSetting(string key) =>
+        ValueTask.FromResult(_config.GetValueOrDefault(key));
+}
+```
+
+<Aside type="caution">
+  Each activation of a stateless worker has its own independent state. There is no shared state between activations. If you cache data, each activation maintains its own copy.
+</Aside>
+
+## Best Practices
+
+- **Keep workers truly stateless** — don't rely on in-memory state being consistent across calls, since different activations may handle different calls.
+- **Use a single key** — callers typically use a constant key like `0` since the identity doesn't matter for stateless work.
+- **Prefer `ValueTask`** — stateless workers often do synchronous computation; `ValueTask` avoids unnecessary allocations.
+- **Set `maxLocalWorkers`** when accessing bounded resources like connection pools or rate-limited APIs.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of Orleans grains and the virtual actor model.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="Turn-Based Concurrency" icon="random">
+    Understand how regular grains process messages one at a time.
+    [Learn more](/features/turn-based-concurrency/)
+  </Card>
+  <Card title="Grain Placement Strategies" icon="random">
+    Control where grains are activated in the cluster.
+    [Learn more](/features/grain-placement-strategies/)
+  </Card>
+  <Card title="Load Shedding" icon="setting">
+    Protect the cluster from overload with automatic load shedding.
+    [Learn more](/features/load-shedding/)
+  </Card>
+</CardGrid>

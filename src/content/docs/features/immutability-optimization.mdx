@@ -1,0 +1,145 @@
+---
+title: Immutability Optimization
+description: Use Immutable<T> or [Immutable] to skip deep-copying of method arguments in Orleans, reducing serialization overhead for immutable types.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+When a grain method is called within the same silo, Orleans **deep-copies** all method arguments to preserve the isolation guarantee between grains. For large or complex objects, this copying can be expensive. The **immutability optimization** lets you skip deep-copying for types that are known to be immutable, significantly reducing overhead.
+
+## Why Deep-Copying Exists
+
+Orleans guarantees that grains are isolated — modifying an object in one grain never affects another grain. When two grains on the same silo exchange a message, the runtime deep-copies all arguments so the caller and callee each have their own independent copy.
+
+For immutable data — data that never changes after creation — this copying is unnecessary. The immutability optimization tells Orleans that a value can be safely shared without copying.
+
+## Using [Immutable] on a Type
+
+Apply `[Immutable]` to an entire type to indicate all instances are immutable:
+
+```csharp
+[Immutable]
+[GenerateSerializer]
+public record ProductInfo(
+    [property: Id(0)] string ProductId,
+    [property: Id(1)] string Name,
+    [property: Id(2)] decimal Price);
+```
+
+All grain methods that send or receive `ProductInfo` will skip deep-copying for local (same-silo) calls.
+
+<Aside type="caution">
+  Marking a type as `[Immutable]` is a contract. If instances are actually mutated after being passed to a grain, you'll get shared-state bugs that are difficult to diagnose. Only use `[Immutable]` on types that are truly immutable.
+</Aside>
+
+## Using [Immutable] on a Property
+
+When only some members of a type are immutable, apply `[Immutable]` at the property level:
+
+```csharp
+[GenerateSerializer]
+public class OrderState
+{
+    [Id(0)]
+    [Immutable]
+    public string OrderId { get; set; } = "";  // Never changes
+
+    [Id(1)]
+    public decimal Total { get; set; }  // May change — still deep-copied
+
+    [Id(2)]
+    [Immutable]
+    public byte[] Checksum { get; set; } = [];  // Treated as immutable
+}
+```
+
+## Using Immutable&lt;T&gt; Wrapper
+
+For ad-hoc immutability on individual method parameters, wrap values in `Immutable<T>`:
+
+```csharp
+public interface IAnalyticsGrain : IGrainWithStringKey
+{
+    ValueTask ProcessBatch(Immutable<List<DataPoint>> points);
+}
+```
+
+Calling the method:
+
+```csharp
+var data = new List<DataPoint> { /* ... */ };
+await analytics.ProcessBatch(new Immutable<List<DataPoint>>(data));
+// Do NOT modify 'data' after this call — it's shared with the grain
+```
+
+Accessing the value in the grain:
+
+```csharp
+public class AnalyticsGrain : Grain, IAnalyticsGrain
+{
+    public ValueTask ProcessBatch(Immutable<List<DataPoint>> points)
+    {
+        var data = points.Value; // Access the wrapped value
+        foreach (var point in data)
+        {
+            // Process each data point
+        }
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+<Aside type="tip">
+  `Immutable<T>` is useful when the type itself isn't inherently immutable, but you know a specific instance won't be modified after passing it. Use with care.
+</Aside>
+
+## When to Use Each Approach
+
+| Approach | Use Case |
+|---|---|
+| `[Immutable]` on type | Types that are always immutable (records, value objects, DTOs) |
+| `[Immutable]` on property | Mixed types where only some members are immutable |
+| `Immutable<T>` wrapper | Ad-hoc immutability for specific method calls |
+
+## Performance Impact
+
+The benefit depends on the size and complexity of the data being passed:
+
+- **Small types** (few primitive fields) — minimal benefit, since deep-copying is cheap.
+- **Large collections** — significant benefit, especially for `List<T>`, `Dictionary<K,V>`, or arrays with many elements.
+- **Complex object graphs** — high benefit, since deep-copying traverses the entire graph.
+- **Cross-silo calls** — no benefit, since cross-silo calls always serialize/deserialize regardless of immutability.
+
+<Aside>
+  The immutability optimization only affects **local** (same-silo) calls. For cross-silo calls, data is always serialized and deserialized, so immutability has no impact.
+</Aside>
+
+## Naturally Immutable Types
+
+Some .NET types are naturally immutable and don't need the `[Immutable]` attribute:
+
+- Primitive types (`int`, `string`, `bool`, etc.)
+- `DateTime`, `DateTimeOffset`, `TimeSpan`, `Guid`
+- C# `record` types with `init`-only properties (by convention, though Orleans doesn't enforce this)
+- `ReadOnlyMemory<T>`, `ReadOnlySpan<T>`
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Serialization Framework" icon="seti:json">
+    Learn about the full serialization system, version tolerance, and surrogates.
+    [Learn more](/features/serialization-framework/)
+  </Card>
+  <Card title="Code Generation" icon="setting">
+    Understand how source generators produce serializers and grain code.
+    [Learn more](/features/code-generation/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Persist immutable and mutable grain state to storage.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Understand grain method calls and message passing.
+    [Learn more](/features/grains/)
+  </Card>
+</CardGrid>

@@ -6,66 +6,66 @@ Features with existing documentation are **not** listed here (Grain Persistence,
 
 ## Core Programming Model
 
-- [ ] Document Grains (Virtual Actors)
-- [ ] Document Grain Identity & Lifecycle
-- [ ] Document Turn-Based Concurrency
-- [ ] Document Stateless Worker Grains
-- [ ] Document Grain Extensions
+- [x] Document Grains (Virtual Actors)
+- [x] Document Grain Identity & Lifecycle
+- [x] Document Turn-Based Concurrency
+- [x] Document Stateless Worker Grains
+- [x] Document Grain Extensions
 
 ## Communication & Messaging
 
-- [ ] Document Observers
-- [ ] Document Request/Response & One-Way Messaging
-- [ ] Document Request Context
-- [ ] Document Cancellation Tokens
+- [x] Document Observers
+- [x] Document Request/Response & One-Way Messaging
+- [x] Document Request Context
+- [x] Document Cancellation Tokens
 
 ## Event Sourcing
 
-- [ ] Document Journaled Grains
-- [ ] Document Log-Consistency Providers
+- [x] Document Journaled Grains
+- [x] Document Log-Consistency Providers
 
 ## Cluster Management
 
-- [ ] Document Silo Clustering
-- [ ] Document Grain Directory
-- [ ] Document Heterogeneous Silos
-- [ ] Document Grain Migration
+- [x] Document Silo Clustering
+- [x] Document Grain Directory
+- [x] Document Heterogeneous Silos
+- [x] Document Grain Migration
 
 ## Reliability & Transactions
 
-- [ ] Document ACID Transactions
-- [ ] Document Reentrancy & Request Scheduling
-- [ ] Document Load Shedding
+- [x] Document ACID Transactions
+- [x] Document Reentrancy & Request Scheduling
+- [x] Document Load Shedding
 
 ## Versioning & Deployment
 
-- [ ] Document Grain Interface Versioning
-- [ ] Document Kubernetes Hosting
-- [ ] Document Multi-Cluster / Geo-Distribution
+- [x] Document Grain Interface Versioning
+- [x] Document Kubernetes Hosting
+- [x] Document Multi-Cluster / Geo-Distribution
 
 ## Serialization & Code Generation
 
-- [ ] Document Serialization Framework
-- [ ] Document Code Generation (Source Generators)
-- [ ] Document Immutability Optimization
+- [x] Document Serialization Framework
+- [x] Document Code Generation (Source Generators)
+- [x] Document Immutability Optimization
 
 ## Interceptors & Cross-Cutting Concerns
 
-- [ ] Document Grain Call Filters
-- [ ] Document Grain Services
+- [x] Document Grain Call Filters
+- [x] Document Grain Services
 
 ## Observability
 
-- [ ] Document Distributed Tracing (OpenTelemetry)
-- [ ] Document Metrics & Monitoring
-- [ ] Document Orleans Dashboard
+- [x] Document Distributed Tracing (OpenTelemetry)
+- [x] Document Metrics & Monitoring
+- [x] Document Orleans Dashboard
 
 ## Integration & Extensibility
 
-- [ ] Document ASP.NET Core Co-Hosting
-- [ ] Document .NET Aspire Integration
-- [ ] Document Grain Placement Strategies
+- [x] Document ASP.NET Core Co-Hosting
+- [x] Document .NET Aspire Integration
+- [x] Document Grain Placement Strategies
 
 ## Testing
 
-- [ ] Document Unit Testing (TestCluster)
+- [x] Document Unit Testing (TestCluster)

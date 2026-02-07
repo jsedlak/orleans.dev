@@ -1,0 +1,144 @@
+---
+title: Load Shedding
+description: Automatically reject new requests and deactivate grains when a silo is overloaded, protecting the cluster from cascading failure.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+**Load shedding** protects Orleans clusters from cascading failures during periods of high load. When a silo is overloaded, it can automatically reject new requests and deactivate least-recently-used grain activations to free resources. This prevents a single overwhelmed silo from degrading the entire cluster.
+
+## Request Load Shedding
+
+When enabled, request load shedding rejects incoming messages with a `LoadSheddingException` if the silo's CPU utilization exceeds a configurable threshold.
+
+### Configuration
+
+```csharp
+siloBuilder.Configure<LoadSheddingOptions>(options =>
+{
+    options.LoadSheddingEnabled = true;
+    options.LoadSheddingLimit = 95; // CPU percentage threshold
+});
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `LoadSheddingEnabled` | `false` | Enable or disable load shedding. |
+| `LoadSheddingLimit` | `95` | CPU utilization percentage (0-100) at which the silo starts rejecting requests. |
+
+### Handling Rejected Requests
+
+Callers receive a `LoadSheddingException` when a silo sheds their request. Handle it by retrying or routing to another silo:
+
+```csharp
+try
+{
+    var result = await grain.DoWork();
+}
+catch (LoadSheddingException)
+{
+    // The silo is overloaded — retry after a delay
+    await Task.Delay(TimeSpan.FromSeconds(1));
+    var result = await grain.DoWork();
+}
+```
+
+<Aside type="tip">
+  Clients and external callers should implement retry logic with exponential backoff when they encounter `LoadSheddingException`. The Orleans client runtime handles some of this automatically by routing to different silos.
+</Aside>
+
+## Activation Shedding
+
+Activation shedding deactivates grain activations when the silo's memory usage exceeds a threshold. Least-recently-used grains are deactivated first to free memory.
+
+### Configuration
+
+```csharp
+siloBuilder.Configure<GrainCollectionOptions>(options =>
+{
+    // Deactivate idle grains more aggressively under memory pressure
+    options.CollectionAge = TimeSpan.FromMinutes(2);
+});
+
+siloBuilder.Configure<LoadSheddingOptions>(options =>
+{
+    options.LoadSheddingEnabled = true;
+});
+```
+
+### How It Works
+
+<Steps>
+1. **Monitor** — the silo tracks CPU and memory utilization continuously.
+
+2. **Threshold reached** — when utilization exceeds the configured limit, load shedding activates.
+
+3. **Reject new requests** — incoming messages to the silo return `LoadSheddingException`.
+
+4. **Deactivate grains** — the runtime deactivates idle grains starting with those least recently used.
+
+5. **Recovery** — once utilization drops below the threshold, the silo resumes normal operation.
+</Steps>
+
+## Silo-Level Overload Detection
+
+Orleans monitors silo health using built-in statistics:
+
+```csharp
+siloBuilder.Configure<StatisticsOptions>(options =>
+{
+    // How often to collect statistics (default: 1 minute)
+    options.CollectionLevel = StatisticsLevel.Critical;
+});
+```
+
+The runtime tracks:
+
+- **CPU utilization** — percentage of CPU used by the silo process.
+- **Memory pressure** — total memory consumption and GC pressure.
+- **Message queue length** — number of pending messages waiting to be processed.
+- **Activation count** — total number of grain activations on the silo.
+
+## Gateway Connection Management
+
+For external clients connecting through gateways, you can limit the number of concurrent client connections:
+
+```csharp
+siloBuilder.Configure<ConnectionOptions>(options =>
+{
+    options.ConnectionsPerEndpoint = 1;
+});
+```
+
+## Best Practices
+
+- **Enable load shedding in production** — it's disabled by default, but is an important safety net for production clusters.
+- **Set appropriate thresholds** — the right CPU limit depends on your workload. Start at 90-95% and adjust based on observed behavior.
+- **Monitor shedding events** — track `LoadSheddingException` rates and silo utilization in your [metrics and monitoring](/features/metrics-and-monitoring/) system.
+- **Size your cluster** — load shedding is a safety mechanism, not a substitute for proper capacity planning.
+- **Use activation collection** — configure aggressive idle collection ages for grains that are cheap to reactivate.
+
+<Aside type="caution">
+  Load shedding drops requests and deactivates grains. While this protects the cluster, it impacts availability. Ensure your clients handle `LoadSheddingException` gracefully and your grains can tolerate unexpected deactivation.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Silo Clustering" icon="puzzle">
+    Understand how silos form a cluster and detect failures.
+    [Learn more](/features/silo-clustering/)
+  </Card>
+  <Card title="Metrics & Monitoring" icon="document">
+    Track silo health and load shedding events.
+    [Learn more](/features/metrics-and-monitoring/)
+  </Card>
+  <Card title="Grain Placement Strategies" icon="random">
+    Distribute grains across the cluster to balance load.
+    [Learn more](/features/grain-placement-strategies/)
+  </Card>
+  <Card title="Heterogeneous Silos" icon="setting">
+    Scale different workloads independently.
+    [Learn more](/features/heterogeneous-silos/)
+  </Card>
+</CardGrid>

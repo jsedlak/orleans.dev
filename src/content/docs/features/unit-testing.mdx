@@ -1,0 +1,237 @@
+---
+title: Unit Testing (TestCluster)
+description: Test Orleans grains with TestCluster for integration tests and mock IGrainFactory for isolated unit tests.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans provides `TestCluster` from `Microsoft.Orleans.TestingHost` for integration testing grains in a real (but in-memory) cluster. For isolated unit tests, you can mock `IGrainFactory` and test grain logic without any Orleans infrastructure.
+
+## Integration Testing with TestCluster
+
+`TestCluster` spins up an in-memory Orleans cluster with one or more silos. Grains run in the same process but with full Orleans runtime behavior — activation, deactivation, persistence, timers, and reminders all work as they would in production.
+
+### Setup
+
+```bash
+dotnet add package Microsoft.Orleans.TestingHost
+```
+
+### Basic Test
+
+```csharp
+using Orleans.TestingHost;
+
+public class PlayerGrainTests : IAsyncLifetime
+{
+    private TestCluster _cluster = null!;
+
+    public async Task InitializeAsync()
+    {
+        var builder = new TestClusterBuilder();
+        _cluster = builder.Build();
+        await _cluster.DeployAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _cluster.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SetName_ShouldPersistName()
+    {
+        var grain = _cluster.GrainFactory.GetGrain<IPlayerGrain>(Guid.NewGuid());
+
+        await grain.SetName("Alice");
+        var name = await grain.GetName();
+
+        Assert.Equal("Alice", name);
+    }
+}
+```
+
+### Configuring the Test Cluster
+
+Use `ISiloConfigurator` to configure storage, streams, and other providers:
+
+```csharp
+public class TestSiloConfigurator : ISiloConfigurator
+{
+    public void Configure(ISiloBuilder siloBuilder)
+    {
+        siloBuilder.AddMemoryGrainStorage("Default");
+        siloBuilder.AddMemoryGrainStorage("PubSubStore");
+        siloBuilder.AddMemoryStreams("StreamProvider");
+        siloBuilder.UseInMemoryReminderService();
+    }
+}
+
+// Use in tests
+var builder = new TestClusterBuilder();
+builder.AddSiloBuilderConfigurator<TestSiloConfigurator>();
+_cluster = builder.Build();
+await _cluster.DeployAsync();
+```
+
+### Testing with Persistent State
+
+```csharp
+[Fact]
+public async Task Deposit_ShouldSurviveDeactivation()
+{
+    var id = Guid.NewGuid();
+    var grain = _cluster.GrainFactory.GetGrain<IBankAccountGrain>(id);
+
+    await grain.Deposit(100m);
+    Assert.Equal(100m, await grain.GetBalance());
+
+    // Force deactivation
+    await grain.Deactivate();
+
+    // Re-access the grain (triggers reactivation)
+    var balance = await grain.GetBalance();
+    Assert.Equal(100m, balance); // State persisted
+}
+```
+
+<Aside type="tip">
+  `TestCluster` uses in-memory providers by default, so state is durable within a test but not across test runs. This is ideal for testing grain logic without external dependencies.
+</Aside>
+
+### Multi-Silo Testing
+
+Test cluster behavior with multiple silos:
+
+```csharp
+var builder = new TestClusterBuilder(siloCount: 3);
+builder.AddSiloBuilderConfigurator<TestSiloConfigurator>();
+_cluster = builder.Build();
+await _cluster.DeployAsync();
+
+// Grains may be activated on any of the 3 silos
+var grain = _cluster.GrainFactory.GetGrain<IPlayerGrain>(Guid.NewGuid());
+await grain.SetName("Alice");
+```
+
+## Unit Testing with Mocks
+
+For isolated unit tests that don't need the Orleans runtime, test grain logic directly:
+
+### Testing POCO Grains
+
+POCO grains (implementing `IGrainBase`) can be instantiated directly:
+
+```csharp
+[Fact]
+public void GetName_ShouldReturnSetName()
+{
+    var mockContext = new Mock<IGrainContext>();
+    var grain = new PlayerGrain(mockContext.Object);
+
+    grain.SetNameDirect("Alice"); // Direct method for testing
+
+    Assert.Equal("Alice", grain.GetNameDirect());
+}
+```
+
+### Mocking IGrainFactory
+
+For grains that call other grains:
+
+```csharp
+[Fact]
+public async Task PlaceOrder_ShouldCallInventory()
+{
+    var mockInventory = new Mock<IInventoryGrain>();
+    mockInventory
+        .Setup(x => x.Reserve(It.IsAny<int>()))
+        .ReturnsAsync(true);
+
+    var mockFactory = new Mock<IGrainFactory>();
+    mockFactory
+        .Setup(x => x.GetGrain<IInventoryGrain>(It.IsAny<string>(), null))
+        .Returns(mockInventory.Object);
+
+    // Test the order logic with mocked dependencies
+}
+```
+
+<Aside>
+  Pure unit testing with mocks is useful for business logic, but integration tests with `TestCluster` are more valuable for verifying Orleans-specific behavior like concurrency, persistence, and timers.
+</Aside>
+
+## Test Organization
+
+### Shared Cluster Fixture
+
+Reuse a `TestCluster` across multiple test classes to avoid the overhead of starting a new cluster per test:
+
+```csharp
+public class ClusterFixture : IAsyncLifetime
+{
+    public TestCluster Cluster { get; private set; } = null!;
+
+    public async Task InitializeAsync()
+    {
+        var builder = new TestClusterBuilder();
+        builder.AddSiloBuilderConfigurator<TestSiloConfigurator>();
+        Cluster = builder.Build();
+        await Cluster.DeployAsync();
+    }
+
+    public async Task DisposeAsync() =>
+        await Cluster.DisposeAsync();
+}
+
+[CollectionDefinition("Cluster")]
+public class ClusterCollection : ICollectionFixture<ClusterFixture> { }
+
+[Collection("Cluster")]
+public class PlayerGrainTests
+{
+    private readonly TestCluster _cluster;
+
+    public PlayerGrainTests(ClusterFixture fixture)
+    {
+        _cluster = fixture.Cluster;
+    }
+
+    [Fact]
+    public async Task SetName_Works()
+    {
+        var grain = _cluster.GrainFactory.GetGrain<IPlayerGrain>(Guid.NewGuid());
+        await grain.SetName("Test");
+        Assert.Equal("Test", await grain.GetName());
+    }
+}
+```
+
+## Best Practices
+
+- **Use `TestCluster` for integration tests** — it validates the full Orleans behavior including concurrency and persistence.
+- **Use unique grain IDs per test** — prevents interference between tests running against a shared cluster.
+- **Configure in-memory providers** — avoid external dependencies in tests.
+- **Test failure scenarios** — verify grain behavior when storage fails or calls timeout.
+- **Share the cluster** — starting a `TestCluster` is expensive; reuse it across tests.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grains (Virtual Actors)" icon="seti:csharp">
+    Learn the fundamentals of grains that you'll be testing.
+    [Learn more](/features/grains/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Understand persistence behavior to test state management.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="Turn-Based Concurrency" icon="random">
+    Test concurrent behavior and reentrancy.
+    [Learn more](/features/turn-based-concurrency/)
+  </Card>
+  <Card title="Getting Started" icon="rocket">
+    Set up a complete Orleans project to test.
+    [Get started](/guides/getting-started/)
+  </Card>
+</CardGrid>

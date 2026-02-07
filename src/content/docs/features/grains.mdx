@@ -1,0 +1,183 @@
+---
+title: Grains (Virtual Actors)
+description: Understand grains — the fundamental building block of Orleans. Isolated, single-threaded units of state and logic with stable identities.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Grains are the core abstraction of Orleans. A grain is a **virtual actor** — an isolated unit of state and logic with a unique, stable identity. Unlike traditional actors that must be explicitly created and destroyed, Orleans grains are **virtual**: they always logically exist and are automatically **activated** in memory when a message arrives and **deactivated** when idle.
+
+Key properties of grains:
+
+- **Single-threaded execution** — each grain processes one message at a time, eliminating the need for locks.
+- **Location-transparent** — callers address grains by identity, not physical location. Orleans routes messages to the correct silo automatically.
+- **Automatically managed lifecycle** — the runtime activates grains on demand and deactivates them when idle. No manual create/destroy.
+- **Persistable state** — grains can optionally store durable state using [grain persistence](/features/grain-persistence/).
+
+## Defining a Grain Interface
+
+Every grain exposes its API through an interface that extends one of the `IGrainWithXKey` marker interfaces. The key type determines how the grain is identified.
+
+```csharp
+public interface IPlayerGrain : IGrainWithGuidKey
+{
+    ValueTask<string> GetName();
+    ValueTask SetName(string name);
+}
+```
+
+Available key interfaces:
+
+| Interface | Key type | Example |
+|---|---|---|
+| `IGrainWithGuidKey` | `Guid` | Per-session or per-entity grains |
+| `IGrainWithIntegerKey` | `long` | Numeric identifiers |
+| `IGrainWithStringKey` | `string` | Natural keys like usernames or device IDs |
+| `IGrainWithGuidCompoundKey` | `Guid` + `string` | Composite identifiers |
+| `IGrainWithIntegerCompoundKey` | `long` + `string` | Composite identifiers |
+
+<Aside type="tip">
+  Choose the key type that matches your domain's natural identifier. String keys are the most flexible but slightly less efficient than `Guid` or `long` keys.
+</Aside>
+
+## Implementing a Grain
+
+A grain class inherits from `Grain` (or implements `IGrainBase` for POCO grains) and implements one or more grain interfaces.
+
+```csharp
+public class PlayerGrain : Grain, IPlayerGrain
+{
+    private string _name = "Unknown";
+
+    public ValueTask<string> GetName() =>
+        ValueTask.FromResult(_name);
+
+    public ValueTask SetName(string name)
+    {
+        _name = name;
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+All grain methods must return `Task`, `ValueTask`, `Task<T>`, or `ValueTask<T>`. Synchronous methods are not supported on grain interfaces.
+
+## Calling a Grain
+
+To invoke a grain, obtain a **grain reference** from `IGrainFactory` and call methods on it. You never instantiate grain classes directly.
+
+```csharp
+// From an ASP.NET Core endpoint
+app.MapGet("/player/{id}", async (IGrainFactory grains, Guid id) =>
+{
+    var player = grains.GetGrain<IPlayerGrain>(id);
+    var name = await player.GetName();
+    return Results.Ok(new { id, name });
+});
+```
+
+From within another grain, use the inherited `GrainFactory` property:
+
+```csharp
+public class TeamGrain : Grain, ITeamGrain
+{
+    public async ValueTask<string> GetCaptainName(Guid captainId)
+    {
+        var captain = GrainFactory.GetGrain<IPlayerGrain>(captainId);
+        return await captain.GetName();
+    }
+}
+```
+
+<Aside>
+  `GetGrain` does **not** activate the grain. Activation happens lazily when the first method is called. The returned reference is a lightweight proxy that can be stored and reused.
+</Aside>
+
+## POCO Grains
+
+Starting with Orleans 7, grains don't need to inherit from the `Grain` base class. **POCO grains** are plain C# classes that implement `IGrainBase` and receive their context through dependency injection.
+
+```csharp
+public class ChatGrain : IGrainBase, IChatGrain
+{
+    public IGrainContext GrainContext { get; }
+
+    public ChatGrain(IGrainContext context)
+    {
+        GrainContext = context;
+    }
+
+    public ValueTask<string> SayHello() =>
+        ValueTask.FromResult("Hello from a POCO grain!");
+}
+```
+
+POCO grains have full access to dependency injection, timers, reminders, and all other Orleans features. The `IGrainBase` interface requires only the `GrainContext` property.
+
+## Grain Activation and Deactivation
+
+Grains can override lifecycle methods to perform setup and teardown:
+
+```csharp
+public class SessionGrain : Grain, ISessionGrain
+{
+    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        // Called when the grain is activated (before any messages are processed)
+        // Load resources, start timers, etc.
+        return base.OnActivateAsync(cancellationToken);
+    }
+
+    public override Task OnDeactivateAsync(
+        DeactivationReason reason,
+        CancellationToken cancellationToken)
+    {
+        // Called when the grain is about to be deactivated
+        // Clean up resources, flush state, etc.
+        return base.OnDeactivateAsync(reason, cancellationToken);
+    }
+}
+```
+
+<Aside type="caution">
+  `OnDeactivateAsync` is called on a best-effort basis. If the silo crashes, the method won't run. Don't rely on it for critical state persistence — use [grain persistence](/features/grain-persistence/) instead.
+</Aside>
+
+## Serialization
+
+All types passed to and from grain methods must be serializable. Use the `[GenerateSerializer]` and `[Id(n)]` attributes:
+
+```csharp
+[GenerateSerializer]
+public record PlayerInfo
+{
+    [Id(0)]
+    public string Name { get; init; } = "";
+
+    [Id(1)]
+    public int Score { get; init; }
+}
+```
+
+See [Serialization Framework](/features/serialization-framework/) for details on Orleans serialization.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Identity & Lifecycle" icon="setting">
+    Learn how grain identities work and how Orleans manages activation and deactivation.
+    [Learn more](/features/grain-identity-and-lifecycle/)
+  </Card>
+  <Card title="Grain Persistence" icon="pencil">
+    Add durable state to grains so data survives deactivation and restarts.
+    [Learn more](/features/grain-persistence/)
+  </Card>
+  <Card title="Turn-Based Concurrency" icon="random">
+    Understand how Orleans single-threaded execution model eliminates concurrency bugs.
+    [Learn more](/features/turn-based-concurrency/)
+  </Card>
+  <Card title="Getting Started" icon="rocket">
+    New to Orleans? Start with the full setup guide.
+    [Get started](/guides/getting-started/)
+  </Card>
+</CardGrid>
