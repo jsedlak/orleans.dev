@@ -11,6 +11,9 @@ importers:
       '@astrojs/starlight':
         specifier: ^0.37.6
         version: 0.37.6(astro@5.17.1(rollup@4.57.1)(typescript@5.9.3))
+      '@jop-software/astro-cookieconsent':
+        specifier: ^3.0.1
+        version: 3.0.1(vanilla-cookieconsent@3.1.0)
       astro:
         specifier: ^5.6.1
         version: 5.17.1(rollup@4.57.1)(typescript@5.9.3)
@@ -20,6 +23,9 @@ importers:
       starlight-sidebar-topics:
         specifier: ^0.6.2
         version: 0.6.2(@astrojs/starlight@0.37.6(astro@5.17.1(rollup@4.57.1)(typescript@5.9.3)))
+      vanilla-cookieconsent:
+        specifier: ^3.1.0
+        version: 3.1.0
 
 packages:
 
@@ -406,6 +412,11 @@ packages:
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [x64]
     os: [win32]
+
+  '@jop-software/astro-cookieconsent@3.0.1':
+    resolution: {integrity: sha512-UXo6aMR9/kEEmUIZoRTRJXDf/ADju9qQ0qNRWM1twdf0vRCh2s/ucHqaYOcs57Q2PcKmcq+Sc+0Tq0gSUgVDzA==}
+    peerDependencies:
+      vanilla-cookieconsent: ^3.0.0
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
@@ -1737,6 +1748,9 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
+  vanilla-cookieconsent@3.1.0:
+    resolution: {integrity: sha512-/McNRtm/3IXzb9dhqMIcbquoU45SzbN2VB+To4jxEPqMmp7uVniP6BhGLjU8MC7ZCDsNQVOp27fhQTM/ruIXAA==}
+
   vfile-location@5.0.3:
     resolution: {integrity: sha512-5yXvWDEgqeiYiBe1lbxYF7UMAIm/IcopxMHrMQDq3nvKcjPKIhZklUKL+AE7J7uApI4kwe2snsK+eI6UTj9EHg==}
 
@@ -2176,6 +2190,10 @@ snapshots:
 
   '@img/sharp-win32-x64@0.34.5':
     optional: true
+
+  '@jop-software/astro-cookieconsent@3.0.1(vanilla-cookieconsent@3.1.0)':
+    dependencies:
+      vanilla-cookieconsent: 3.1.0
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
@@ -4056,6 +4074,8 @@ snapshots:
       ufo: 1.6.3
 
   util-deprecate@1.0.2: {}
+
+  vanilla-cookieconsent@3.1.0: {}
 
   vfile-location@5.0.3:
     dependencies:

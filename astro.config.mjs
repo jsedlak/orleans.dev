@@ -2,11 +2,14 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightSidebarTopics from "starlight-sidebar-topics";
+import jopSoftwareCookieConsent from "@jop-software/astro-cookieconsent";
+import { cookieConfig } from "./src/config/cookie.config";
 
 // https://astro.build/config
 export default defineConfig({
   integrations: [
     starlight({
+      customCss: ["./src/styles/cookieconsent-custom.css"],
       title: "Orleans",
       social: [
         {
@@ -93,5 +96,6 @@ export default defineConfig({
         ]),
       ],
     }),
+    jopSoftwareCookieConsent(cookieConfig),
   ],
 });
