@@ -1,49 +1,54 @@
-# Starlight Starter Kit: Basics
+# orleans.dev
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+> **Note:** This is a community-maintained site and is not the official Microsoft Orleans documentation. For official docs, visit [learn.microsoft.com/dotnet/orleans](https://learn.microsoft.com/dotnet/orleans).
+
+The source code for [orleans.dev](https://orleans.dev), a community documentation site for [Microsoft Orleans](https://github.com/dotnet/orleans) — a cross-platform .NET framework for building robust, scalable distributed applications using the virtual actor model.
+
+## About Orleans
+
+Orleans lets you write single-server application logic while the framework handles distribution, scaling, and fault tolerance. Its core building blocks include:
+
+- **Grains** — Virtual actors with unique identity, encapsulated state, and async methods
+- **Silos** — Host processes that run grains and provide the Orleans runtime
+- **Clients** — External applications that communicate with grains via the cluster
+
+## About This Site
+
+This documentation site covers getting started guides, feature deep-dives (grain persistence, streaming, timers and reminders), and integration options across providers like Redis, Azure Storage, Cosmos DB, DynamoDB, Kafka, and more.
+
+Built with [Astro](https://astro.build) and [Starlight](https://starlight.astro.build).
+
+## Development
+
+Prerequisites: [Node.js](https://nodejs.org) and [pnpm](https://pnpm.io)
+
+```sh
+pnpm install
+pnpm dev
+```
+
+The dev server starts at `localhost:4321`.
+
+| Command          | Action                                       |
+| :--------------- | :------------------------------------------- |
+| `pnpm install`   | Install dependencies                         |
+| `pnpm dev`       | Start local dev server at `localhost:4321`    |
+| `pnpm build`     | Build the production site to `./dist/`       |
+| `pnpm preview`   | Preview the build locally before deploying   |
+
+## Project Structure
 
 ```
-pnpm create astro@latest -- --template starlight
+src/
+├── assets/              # Images and static assets
+├── content/
+│   └── docs/            # Documentation pages (MDX/Markdown)
+│       ├── index.mdx
+│       ├── guides/
+│       ├── features/
+│       ├── integrations/
+│       └── reference/
+└── content.config.ts
 ```
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro + Starlight project, you'll see the following folders and files:
-
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
-```
-
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
-
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
-
-Static assets, like favicons, can be placed in the `public/` directory.
-
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `pnpm install`             | Installs dependencies                            |
-| `pnpm dev`             | Starts local dev server at `localhost:4321`      |
-| `pnpm build`           | Build your production site to `./dist/`          |
-| `pnpm preview`         | Preview your build locally, before deploying     |
-| `pnpm astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `pnpm astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+Documentation pages are written in MDX and located in `src/content/docs/`. Each file maps to a route based on its file name.

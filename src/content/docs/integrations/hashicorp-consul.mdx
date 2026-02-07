@@ -1,0 +1,81 @@
+---
+title: HashiCorp Consul
+description: Use HashiCorp Consul as a clustering provider for Orleans.
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+HashiCorp Consul is a service discovery and configuration tool. Orleans can use Consul's Key/Value store for cluster membership, allowing silos to discover each other and maintain a consistent view of the cluster.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Microsoft.Orleans.OrleansConsulUtils` |
+
+## Installation
+
+```bash
+dotnet add package Microsoft.Orleans.OrleansConsulUtils
+```
+
+## Configuration
+
+### Silo
+
+```csharp
+siloBuilder.UseConsulClustering(options =>
+{
+    options.Address = new Uri("http://localhost:8500");
+});
+```
+
+### Client
+
+```csharp
+clientBuilder.UseConsulClustering(options =>
+{
+    options.Address = new Uri("http://localhost:8500");
+});
+```
+
+## How It Works
+
+The Consul provider stores membership data in Consul's Key/Value store. Each silo writes its membership entry as a KV pair, and the Orleans membership protocol uses Consul's CAS (Check-And-Set) operations for concurrency control during membership updates.
+
+## Configuration Options
+
+| Option | Description | Default |
+|---|---|---|
+| `Address` | URI of the Consul agent (e.g., `http://localhost:8500`) | Required |
+
+<Aside type="tip">
+  Point the Consul address at a local agent rather than directly at a server. The local agent handles forwarding requests to the Consul cluster and provides caching.
+</Aside>
+
+## When to Use Consul
+
+Consul is a good choice when:
+
+- Your infrastructure already uses Consul for service discovery or configuration.
+- You want to leverage Consul's health checking alongside Orleans membership.
+- You prefer HashiCorp tooling for infrastructure management.
+
+For new deployments without existing Consul infrastructure, [Redis](/integrations/redis/) or a cloud-native provider like [Azure Storage](/integrations/azure-storage/) is typically simpler to set up.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Apache ZooKeeper" icon="setting">
+    Another on-premises clustering option using ZooKeeper coordination.
+    [View docs](/integrations/apache-zookeeper/)
+  </Card>
+  <Card title="Redis" icon="redis">
+    Cloud-agnostic provider for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="Integrations Overview" icon="open-book">
+    Compare all available Orleans providers side by side.
+    [View docs](/integrations/)
+  </Card>
+</CardGrid>

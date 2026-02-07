@@ -1,0 +1,164 @@
+---
+title: Azure Cosmos DB
+description: Use Azure Cosmos DB as a provider for Orleans clustering, grain persistence, and reminders.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Azure Cosmos DB is a globally distributed, multi-model database that provides low-latency access at any scale. Orleans supports Cosmos DB for clustering, grain persistence, and reminders using the NoSQL (formerly SQL) API.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Microsoft.Orleans.Clustering.Cosmos` |
+| Grain Persistence | `Microsoft.Orleans.Persistence.Cosmos` |
+| Reminders | `Microsoft.Orleans.Reminders.Cosmos` |
+
+## Installation
+
+```bash
+# Clustering
+dotnet add package Microsoft.Orleans.Clustering.Cosmos
+
+# Persistence
+dotnet add package Microsoft.Orleans.Persistence.Cosmos
+
+# Reminders
+dotnet add package Microsoft.Orleans.Reminders.Cosmos
+```
+
+## Clustering
+
+Cosmos DB stores silo membership data as documents. Each silo registers itself as a document and the membership protocol uses Cosmos DB's optimistic concurrency (ETags) for consistency.
+
+```csharp
+siloBuilder.UseCosmosClustering(options =>
+{
+    options.DatabaseName = "Orleans";
+    options.ContainerName = "OrleansCluster";
+    options.ConfigureCosmosClient("YOUR_CONNECTION_STRING");
+});
+```
+
+Client configuration:
+
+```csharp
+clientBuilder.UseCosmosClustering(options =>
+{
+    options.DatabaseName = "Orleans";
+    options.ContainerName = "OrleansCluster";
+    options.ConfigureCosmosClient("YOUR_CONNECTION_STRING");
+});
+```
+
+## Grain Persistence
+
+Grain state is stored as JSON documents in Cosmos DB. Each grain's state is a single document keyed by grain type and identity.
+
+```csharp
+siloBuilder.AddCosmosGrainStorage(
+    name: "cosmosStore",
+    configureOptions: options =>
+    {
+        options.DatabaseName = "Orleans";
+        options.ContainerName = "OrleansGrainState";
+        options.ConfigureCosmosClient("YOUR_CONNECTION_STRING");
+    });
+```
+
+### Automatic Resource Creation
+
+Set `IsResourceCreationEnabled` to have Orleans create the database and container automatically during startup. This is convenient for development but should be disabled in production where infrastructure is managed separately.
+
+```csharp
+siloBuilder.AddCosmosGrainStorage(
+    name: "cosmosStore",
+    configureOptions: options =>
+    {
+        options.DatabaseName = "Orleans";
+        options.ContainerName = "OrleansGrainState";
+        options.IsResourceCreationEnabled = true;
+        options.ConfigureCosmosClient("YOUR_CONNECTION_STRING");
+    });
+```
+
+<Aside type="caution">
+  Disable `IsResourceCreationEnabled` in production. Use infrastructure-as-code tools (Bicep, Terraform, ARM templates) to manage Cosmos DB resources instead.
+</Aside>
+
+### Custom Partition Keys
+
+By default, Orleans uses the grain ID as the partition key. You can provide a custom partition key strategy to optimize query performance and distribute data across logical partitions.
+
+```csharp
+options.PartitionKeyProvider = (grainType, grainId) =>
+{
+    // Route all grains of a given type to the same partition
+    return new PartitionKey(grainType);
+};
+```
+
+## Reminders
+
+Persistent reminders stored as Cosmos DB documents.
+
+```csharp
+siloBuilder.UseCosmosReminderService(options =>
+{
+    options.DatabaseName = "Orleans";
+    options.ContainerName = "OrleansReminders";
+    options.ConfigureCosmosClient("YOUR_CONNECTION_STRING");
+});
+```
+
+See the [Timers and Reminders](/guides/timers-and-reminders/) guide for usage patterns.
+
+## Configuration Options
+
+Key options available across all Cosmos DB providers:
+
+| Option | Description | Default |
+|---|---|---|
+| `DatabaseName` | Name of the Cosmos DB database | Required |
+| `ContainerName` | Name of the container within the database | Required |
+| `IsResourceCreationEnabled` | Automatically create database and container on startup | `false` |
+| `DatabaseThroughput` | Provisioned throughput (RU/s) when creating the database | `400` |
+
+## Authentication
+
+<Tabs>
+  <TabItem label="Connection String">
+    ```csharp
+    options.ConfigureCosmosClient("AccountEndpoint=https://ACCOUNT.documents.azure.com:443/;AccountKey=KEY;");
+    ```
+  </TabItem>
+  <TabItem label="DefaultAzureCredential">
+    ```csharp
+    options.ConfigureCosmosClient(
+        "https://ACCOUNT.documents.azure.com:443/",
+        new DefaultAzureCredential());
+    ```
+  </TabItem>
+</Tabs>
+
+<Aside type="tip">
+  Use `DefaultAzureCredential` for passwordless authentication in production. It supports Managed Identity, Azure CLI, and other credential sources.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Azure Storage" icon="azure">
+    Table, Blob, and Queue Storage for the broadest Azure provider coverage.
+    [View docs](/integrations/azure-storage/)
+  </Card>
+  <Card title="Redis" icon="redis">
+    In-memory data store for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="Grain Persistence Guide" icon="document">
+    Learn how to add durable state to grains with `[PersistentState]`.
+    [Learn more](/guides/grain-persistence/)
+  </Card>
+</CardGrid>
