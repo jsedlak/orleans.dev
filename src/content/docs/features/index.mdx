@@ -1,6 +1,6 @@
 ---
 title: Features
-description: Explore the major features of Microsoft Orleans — virtual actors, grain persistence, streaming, timers, and more.
+description: Explore the major features of Microsoft Orleans — virtual actors, grain persistence, streaming, event sourcing, transactions, and more.
 ---
 
 import { Card, CardGrid } from "@astrojs/starlight/components";
@@ -23,6 +23,12 @@ Orleans provides a rich set of features for building distributed, scalable appli
   <Card title="Turn-Based Concurrency" icon="random">
     Grains process messages one at a time by default, eliminating races and deadlocks without explicit locks. Reentrancy can be opted into when needed.
   </Card>
+  <Card title="Stateless Worker Grains" icon="rocket">
+    Grains marked with `[StatelessWorker]` allow multiple activations across silos, execute locally to avoid network hops, and auto-scale their activation pool based on load.
+  </Card>
+  <Card title="Grain Extensions" icon="puzzle">
+    Add new functionality to grains at runtime by implementing `IGrainExtension`. Extensions are injected via dependency injection without modifying the original grain class.
+  </Card>
 </CardGrid>
 
 ## Communication & Messaging
@@ -37,6 +43,12 @@ Orleans provides a rich set of features for building distributed, scalable appli
   </Card>
   <Card title="Request/Response & One-Way" icon="document">
     Strongly-typed grain interfaces with async request/response calls. One-way fire-and-forget messages are also supported for scenarios that don't need a response.
+  </Card>
+  <Card title="Request Context" icon="add-document">
+    Flow application metadata — trace IDs, correlation tokens, and custom values — automatically with Orleans requests across grain calls using async-local storage.
+  </Card>
+  <Card title="Cancellation Tokens" icon="setting">
+    Pass standard `CancellationToken` parameters on grain methods to enable cooperative cancellation of long-running operations, with automatic timeout-based cancellation support.
   </Card>
 </CardGrid>
 
@@ -53,6 +65,17 @@ Orleans provides a rich set of features for building distributed, scalable appli
   </Card>
 </CardGrid>
 
+## Event Sourcing
+
+<CardGrid>
+  <Card title="Journaled Grains" icon="pencil">
+    Derive from `JournaledGrain` to model state as the result of applying a sequence of events. Supports atomic multi-event raises, tentative vs. confirmed state, and version tracking.
+  </Card>
+  <Card title="Log-Consistency Providers" icon="setting">
+    Three built-in providers — State Storage (snapshots), Log Storage (event logs), and Custom Storage — with support for replicated grain instances across clusters.
+  </Card>
+</CardGrid>
+
 ## Cluster Management
 
 <CardGrid>
@@ -65,6 +88,9 @@ Orleans provides a rich set of features for building distributed, scalable appli
   <Card title="Heterogeneous Silos" icon="setting">
     Run different grain types on different silos within the same cluster, allowing you to tailor hardware and resources to specific workloads.
   </Card>
+  <Card title="Grain Migration" icon="right-arrow">
+    Migrate grains between silos without losing state via dehydration and rehydration. Grains implement `IGrainMigrationParticipant` to participate in the migration process.
+  </Card>
 </CardGrid>
 
 ## Reliability & Transactions
@@ -73,8 +99,64 @@ Orleans provides a rich set of features for building distributed, scalable appli
   <Card title="ACID Transactions" icon="pencil">
     Coordinate multi-grain operations with distributed ACID transactions — ensuring atomicity, consistency, isolation, and durability across grains and storage.
   </Card>
-  <Card title="Reentrancy & Error Handling" icon="random">
-    Fine-grained control over reentrancy behavior with `[Reentrant]` and `[AlwaysInterleave]` attributes. Exceptions propagate naturally across async grain calls.
+  <Card title="Reentrancy & Request Scheduling" icon="random">
+    Fine-grained control over concurrency with `[Reentrant]`, `[AlwaysInterleave]`, `[ReadOnly]`, and `[MayInterleave]` attributes. Call chain reentrancy scopes for advanced scenarios.
+  </Card>
+  <Card title="Load Shedding" icon="setting">
+    Automatically reject new requests when a silo is overloaded, protecting the cluster from cascading failure. Memory-based activation shedding deactivates least-recently-used grains under pressure.
+  </Card>
+</CardGrid>
+
+## Versioning & Deployment
+
+<CardGrid>
+  <Card title="Grain Interface Versioning" icon="setting">
+    Version grain interfaces for rolling upgrades and staged deployments. The cluster maintains compatibility mappings and automatically redirects requests to compatible activations.
+  </Card>
+  <Card title="Kubernetes Hosting" icon="puzzle">
+    Deploy Orleans clusters on Kubernetes with dedicated hosting that reads pod labels, detects dead silos, and cleans up membership automatically.
+  </Card>
+  <Card title="Multi-Cluster / Geo-Distribution" icon="random">
+    Federate multiple Orleans clusters into a loosely connected multi-cluster for geo-distribution across data centers. Clusters run autonomously even if others fail.
+  </Card>
+</CardGrid>
+
+## Serialization & Code Generation
+
+<CardGrid>
+  <Card title="Serialization Framework" icon="seti:json">
+    High-performance, version-tolerant serialization using `[GenerateSerializer]` and `[Id(n)]` attributes. Faithfully represents .NET generics, polymorphism, object identity, and cyclic graphs.
+  </Card>
+  <Card title="Code Generation (Source Generators)" icon="setting">
+    Build-time C# source generators produce grain references, method dispatching, exception propagation, and serializer code — no runtime code generation required.
+  </Card>
+  <Card title="Immutability Optimization" icon="rocket">
+    Use `Immutable<T>` or `[Immutable]` to skip deep-copying of method arguments for types known to be immutable, reducing serialization overhead.
+  </Card>
+</CardGrid>
+
+## Interceptors & Cross-Cutting Concerns
+
+<CardGrid>
+  <Card title="Grain Call Filters" icon="random">
+    Intercept incoming and outgoing grain calls with `IIncomingGrainCallFilter` and `IOutgoingGrainCallFilter` for authorization, logging, telemetry, and error handling.
+  </Card>
+  <Card title="Grain Services" icon="puzzle">
+    Special grains that run on every silo from startup to shutdown with no stable identity. Used to distribute infrastructure responsibility across the cluster — reminders are implemented this way.
+  </Card>
+</CardGrid>
+
+## Observability
+
+<CardGrid>
+  <Card title="Distributed Tracing (OpenTelemetry)" icon="open-book">
+    Full distributed tracing support for grain calls, timer callbacks, and streaming operations. Enable via `AddActivityPropagation` and integrate with any OpenTelemetry exporter.
+  </Card>
+  <Card title="Metrics & Monitoring" icon="document">
+    Exposes metrics via `System.Diagnostics.Metrics` with a `"Microsoft.Orleans"` meter covering runtime statistics, reminders, storage, streams, and transactions.
+  </Card>
+  <Card title="Orleans Dashboard" icon="setting">
+    Built-in web-based monitoring tool providing real-time visibility into cluster health, silo status, grain activations, method call latency, and live log streaming.
   </Card>
 </CardGrid>
 
@@ -84,10 +166,21 @@ Orleans provides a rich set of features for building distributed, scalable appli
   <Card title="ASP.NET Core Co-Hosting" icon="puzzle">
     Host Orleans silos alongside ASP.NET Core applications in a single process, sharing the same dependency injection container and configuration.
   </Card>
+  <Card title=".NET Aspire Integration" icon="rocket">
+    First-class Aspire resource support with automatic ClusterId, ServiceId, endpoint configuration, service discovery, health checks, and multi-replica scaling.
+  </Card>
   <Card title="Pluggable Providers" icon="setting">
     Swap storage, clustering, streaming, reminders, and grain directory backends without changing application code. See the full list of [available integrations](/integrations/).
   </Card>
   <Card title="Grain Placement Strategies" icon="random">
-    Control where grains are activated in the cluster — random, local, hash-based, activation-count-based, or implement your own custom placement strategy.
+    Control where grains are activated in the cluster — random, local, hash-based, resource-optimized, or implement your own custom placement strategy.
+  </Card>
+</CardGrid>
+
+## Testing
+
+<CardGrid>
+  <Card title="Unit Testing (TestCluster)" icon="open-book">
+    `Microsoft.Orleans.TestingHost` provides `TestCluster` for spinning up in-memory clusters in integration tests. Mock `IGrainFactory` for isolated unit testing without a running cluster.
   </Card>
 </CardGrid>
