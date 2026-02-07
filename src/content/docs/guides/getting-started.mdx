@@ -1,0 +1,257 @@
+---
+title: Getting Started
+description: Get up and running with Microsoft Orleans and .NET Aspire.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans is a cross-platform framework for building distributed applications using the **virtual actor model**. It lets you write single-server application logic while Orleans handles the complexity of distribution, scaling, and fault tolerance.
+
+The core building blocks are:
+
+- **Grains** — virtual actors with a unique identity, encapsulated state, and async methods.
+- **Silos** — host processes that run grains and provide the Orleans runtime.
+- **Clients** — external applications that communicate with grains via the cluster.
+
+This guide walks through a minimal Orleans application using **.NET Aspire** for orchestration.
+
+## Prerequisites
+
+- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9) or later
+- [.NET Aspire workload](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/setup-tooling)
+- A container runtime such as [Docker Desktop](https://www.docker.com/products/docker-desktop/) (required by Aspire for local resources like Redis)
+
+Install the Aspire workload if you haven't already:
+
+```bash
+dotnet workload update
+dotnet workload install aspire
+```
+
+## Solution Structure
+
+A typical Aspire + Orleans solution has four projects:
+
+```
+MyApp/
+  MyApp.AppHost/           # Aspire orchestrator
+  MyApp.ServiceDefaults/   # Shared service configuration
+  MyApp.Silo/              # Orleans server (hosts grains)
+  MyApp.Grains/            # Grain interfaces and implementations
+```
+
+## 1. Create the Solution
+
+<Steps>
+
+1. Scaffold the Aspire starter and add the Orleans projects:
+
+   ```bash
+   dotnet new aspire -n MyApp
+   cd MyApp
+   dotnet new classlib -n MyApp.Grains
+   dotnet new worker -n MyApp.Silo
+   dotnet sln add MyApp.Grains MyApp.Silo
+   ```
+
+2. Add project references:
+
+   ```bash
+   dotnet add MyApp.Silo reference MyApp.Grains
+   dotnet add MyApp.Silo reference MyApp.ServiceDefaults
+   dotnet add MyApp.AppHost reference MyApp.Silo
+   ```
+
+</Steps>
+
+## 2. Add NuGet Packages
+
+<Steps>
+
+1. Add Orleans Aspire hosting to the **AppHost**:
+
+   ```bash
+   dotnet add MyApp.AppHost package Aspire.Hosting.Orleans
+   dotnet add MyApp.AppHost package Aspire.Hosting.Redis
+   ```
+
+2. Add Orleans server packages to the **Silo**:
+
+   ```bash
+   dotnet add MyApp.Silo package Microsoft.Orleans.Server
+   dotnet add MyApp.Silo package Microsoft.Orleans.Clustering.Redis
+   dotnet add MyApp.Silo package Microsoft.Orleans.Persistence.Redis
+   dotnet add MyApp.Silo package Aspire.StackExchange.Redis
+   ```
+
+3. Add the Orleans SDK to the **Grains** class library:
+
+   ```bash
+   dotnet add MyApp.Grains package Microsoft.Orleans.Sdk
+   ```
+
+</Steps>
+
+### Package Reference Summary
+
+| Project | Package | Purpose |
+|---|---|---|
+| AppHost | `Aspire.Hosting.Orleans` | Orleans resource support for Aspire |
+| AppHost | `Aspire.Hosting.Redis` | Redis resource for clustering and storage |
+| Silo | `Microsoft.Orleans.Server` | Core Orleans silo runtime |
+| Silo | `Microsoft.Orleans.Clustering.Redis` | Redis-backed cluster membership |
+| Silo | `Microsoft.Orleans.Persistence.Redis` | Redis-backed grain state storage |
+| Silo | `Aspire.StackExchange.Redis` | Aspire Redis client integration |
+| Grains | `Microsoft.Orleans.Sdk` | Grain interfaces and code generation |
+
+## 3. Define a Grain
+
+Create a simple counter grain in the **Grains** project.
+
+**`MyApp.Grains/ICounterGrain.cs`**
+
+```csharp
+using Orleans;
+
+namespace MyApp.Grains;
+
+public interface ICounterGrain : IGrainWithStringKey
+{
+    ValueTask<int> Increment();
+    ValueTask<int> GetCount();
+}
+```
+
+**`MyApp.Grains/CounterGrain.cs`**
+
+```csharp
+namespace MyApp.Grains;
+
+public class CounterGrain : Grain, ICounterGrain
+{
+    private int _count;
+
+    public ValueTask<int> Increment()
+    {
+        _count++;
+        return ValueTask.FromResult(_count);
+    }
+
+    public ValueTask<int> GetCount() =>
+        ValueTask.FromResult(_count);
+}
+```
+
+<Aside type="tip">
+  All grain methods must return `Task`, `Task<T>`, `ValueTask`, or `ValueTask<T>`. Orleans uses these for transparent network communication between grains and callers.
+</Aside>
+
+## 4. Configure the AppHost
+
+Wire up Redis and Orleans in **`MyApp.AppHost/Program.cs`**:
+
+```csharp
+var builder = DistributedApplication.CreateBuilder(args);
+
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainStorage("Default", redis);
+
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WaitFor(redis);
+
+builder.Build().Run();
+```
+
+The `AddOrleans` call creates an Orleans resource that Aspire manages. `.WithClustering(redis)` tells Orleans to use Redis for cluster membership, and `.WithGrainStorage("Default", redis)` configures Redis as the default grain state store.
+
+## 5. Configure the Silo
+
+Replace the contents of **`MyApp.Silo/Program.cs`**:
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.AddServiceDefaults();
+builder.AddKeyedRedisClient("redis");
+builder.UseOrleans();
+
+builder.Build().Run();
+```
+
+That's it. Aspire injects all Orleans configuration (cluster ID, service ID, endpoints, provider settings) through environment variables. The parameterless `UseOrleans()` reads these automatically.
+
+<Aside>
+  The resource name passed to `AddKeyedRedisClient("redis")` must match the name used in `builder.AddRedis("redis")` in the AppHost. This is how Aspire wires connection strings between projects.
+</Aside>
+
+## 6. Add an API Endpoint (Optional)
+
+To interact with grains over HTTP, you can switch the silo to a web application. Replace the `worker` template setup in the Silo with:
+
+**`MyApp.Silo/Program.cs`** (web variant)
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.AddServiceDefaults();
+builder.AddKeyedRedisClient("redis");
+builder.UseOrleans();
+
+var app = builder.Build();
+
+app.MapGet("/counter/{name}", async (IGrainFactory grains, string name) =>
+{
+    var grain = grains.GetGrain<ICounterGrain>(name);
+    var count = await grain.Increment();
+    return Results.Ok(new { name, count });
+});
+
+app.Run();
+```
+
+<Aside type="tip">
+  When the silo is hosted inside a `WebApplication`, you can inject `IGrainFactory` directly into minimal API endpoints to interact with grains.
+</Aside>
+
+## 7. Run the Application
+
+Start the Aspire AppHost:
+
+```bash
+dotnet run --project MyApp.AppHost
+```
+
+Aspire will start Redis and the silo automatically. If you added the HTTP endpoint, you can test it:
+
+```bash
+curl http://localhost:5000/counter/myCounter
+# {"name":"myCounter","count":1}
+
+curl http://localhost:5000/counter/myCounter
+# {"name":"myCounter","count":2}
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Persistence" icon="document">
+    Add durable state to grains with `[PersistentState]` so data survives grain deactivation.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/grains/grain-persistence/)
+  </Card>
+  <Card title="Timers and Reminders" icon="setting">
+    Schedule periodic work inside grains using timers for short-lived tasks and reminders for durable scheduling.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/grains/timers-and-reminders)
+  </Card>
+  <Card title="Streaming" icon="rocket">
+    Build reactive pipelines with Orleans Streams for real-time event processing.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/streaming/)
+  </Card>
+  <Card title="Scaling with Replicas" icon="random">
+    Add `.WithReplicas(n)` to your silo in the AppHost to horizontally scale grain processing across multiple instances.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/host/configuration-guide/)
+  </Card>
+</CardGrid>
