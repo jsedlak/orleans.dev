@@ -2,3 +2,26 @@
   --sl-content-width: 60rem;
   --sl-text-5xl: 3.5rem;
 }
+
+/* Community alert banner */
+.sl-banner {
+  --sl-banner-bg: #f59e0b;
+  --sl-banner-text: #1c1917;
+  background: var(--sl-banner-bg) !important;
+  color: var(--sl-banner-text) !important;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding-block: 0.6rem;
+  text-align: center;
+}
+
+.sl-banner a {
+  color: var(--sl-banner-text) !important;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 700;
+}
+
+.sl-banner a:hover {
+  text-decoration-thickness: 2px;
+}
