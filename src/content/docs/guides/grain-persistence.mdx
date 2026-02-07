@@ -1,0 +1,286 @@
+---
+title: Grain Persistence
+description: Add durable state to Orleans grains so data survives grain deactivation, silo restarts, and deployments.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Grains keep state in memory by default, which means data is lost when a grain deactivates or a silo restarts. **Grain persistence** lets you attach durable state objects to a grain that Orleans automatically loads during activation and that you explicitly write back to storage when state changes.
+
+## How It Works
+
+Orleans uses a plugin model for persistence. You configure one or more **storage providers** on the silo, then inject named state objects into your grains. The runtime handles the rest:
+
+1. When a grain activates, Orleans calls `ReadStateAsync` on each injected state object **before** `OnActivateAsync` runs.
+2. Your grain reads and modifies state through the `State` property.
+3. You call `WriteStateAsync` to persist changes — state is **never** written automatically.
+4. Optionally, call `ClearStateAsync` to reset state in storage.
+
+<Aside>
+  State is **not** loaded at constructor time. Accessing it before `OnActivateAsync` is invalid. By the time any grain method runs, all state objects are guaranteed to be loaded.
+</Aside>
+
+## 1. Define a State Class
+
+A state class is a plain C# class with serializable properties. Each state class represents one named piece of persistent data.
+
+```csharp
+[GenerateSerializer]
+public class CounterState
+{
+    [Id(0)]
+    public int Value { get; set; }
+
+    [Id(1)]
+    public DateTime LastModified { get; set; }
+}
+```
+
+<Aside type="tip">
+  Use the `[GenerateSerializer]` and `[Id(n)]` attributes so Orleans can serialize your state efficiently. This is required for Orleans 7+ and is the recommended approach for all versions.
+</Aside>
+
+## 2. Inject State with `[PersistentState]`
+
+Inject `IPersistentState<TState>` into your grain's constructor and annotate it with the `[PersistentState]` attribute. The attribute takes two arguments: the **state name** (a logical key within the grain) and the **storage provider name** (matching a provider registered on the silo).
+
+```csharp
+using Orleans.Runtime;
+
+public class CounterGrain : Grain, ICounterGrain
+{
+    private readonly IPersistentState<CounterState> _state;
+
+    public CounterGrain(
+        [PersistentState("counter", "Default")]
+        IPersistentState<CounterState> state)
+    {
+        _state = state;
+    }
+
+    public ValueTask<int> GetCount() =>
+        ValueTask.FromResult(_state.State.Value);
+
+    public async ValueTask<int> Increment()
+    {
+        _state.State.Value++;
+        _state.State.LastModified = DateTime.UtcNow;
+        await _state.WriteStateAsync();
+        return _state.State.Value;
+    }
+}
+```
+
+With this change, the counter value survives grain deactivation and silo restarts.
+
+## 3. Read, Write, and Clear State
+
+`IPersistentState<TState>` exposes three storage operations:
+
+| Method | When to use |
+|---|---|
+| `ReadStateAsync()` | Refresh state from storage. Rarely needed — Orleans reads state automatically on activation. |
+| `WriteStateAsync()` | Persist the current `State` to storage. **You must call this explicitly** after modifying state. |
+| `ClearStateAsync()` | Reset state in storage. The `State` property reverts to its default values. |
+
+```csharp
+// Re-read from storage (useful if external process may have modified it)
+await _state.ReadStateAsync();
+
+// Persist changes
+_state.State.Value = 42;
+await _state.WriteStateAsync();
+
+// Clear stored state
+await _state.ClearStateAsync();
+```
+
+<Aside type="tip">
+  `RecordExists` on `IPersistentState<TState>` tells you whether state was found in storage during the last read. This is useful for distinguishing between "default state" and "no state has ever been written."
+</Aside>
+
+## 4. Multiple State Objects
+
+A single grain can hold multiple independent state objects, each potentially backed by a different storage provider. Unlike the legacy `Grain<TState>` base class which limited you to a single state, the constructor injection approach supports any number of state objects.
+
+```csharp
+[GenerateSerializer]
+public class ProfileState
+{
+    [Id(0)]
+    public string Name { get; set; } = "";
+
+    [Id(1)]
+    public string Email { get; set; } = "";
+}
+
+[GenerateSerializer]
+public class CartState
+{
+    [Id(0)]
+    public List<string> Items { get; set; } = [];
+}
+
+public class UserGrain : Grain, IUserGrain
+{
+    private readonly IPersistentState<ProfileState> _profile;
+    private readonly IPersistentState<CartState> _cart;
+
+    public UserGrain(
+        [PersistentState("profile", "profileStore")]
+        IPersistentState<ProfileState> profile,
+        [PersistentState("cart", "cartStore")]
+        IPersistentState<CartState> cart)
+    {
+        _profile = profile;
+        _cart = cart;
+    }
+
+    public async Task UpdateName(string name)
+    {
+        _profile.State.Name = name;
+        await _profile.WriteStateAsync();
+    }
+
+    public async Task AddToCart(string item)
+    {
+        _cart.State.Items.Add(item);
+        await _cart.WriteStateAsync();
+    }
+}
+```
+
+Each state name (e.g., `"profile"`, `"cart"`) is scoped to the grain type and grain identity, so different grains can use the same state name without collision.
+
+## 5. Configure Storage Providers
+
+Before a grain can use persistence, you must register the matching storage provider on the silo. Orleans includes several built-in providers, and you can install additional ones via NuGet.
+
+<Tabs>
+  <TabItem label="Redis">
+    **Package:** `Microsoft.Orleans.Persistence.Redis`
+
+    ```csharp
+    siloBuilder.AddRedisGrainStorage(
+        name: "Default",
+        configureOptions: options =>
+        {
+            options.ConfigurationOptions =
+                ConfigurationOptions.Parse("localhost:6379");
+        });
+    ```
+  </TabItem>
+  <TabItem label="Azure Table">
+    **Package:** `Microsoft.Orleans.Persistence.AzureStorage`
+
+    ```csharp
+    siloBuilder.AddAzureTableGrainStorage(
+        name: "profileStore",
+        configureOptions: options =>
+        {
+            options.TableServiceClient = new TableServiceClient(
+                new Uri("https://myaccount.table.core.windows.net"),
+                new DefaultAzureCredential());
+        });
+    ```
+  </TabItem>
+  <TabItem label="Azure Blob">
+    **Package:** `Microsoft.Orleans.Persistence.AzureStorage`
+
+    ```csharp
+    siloBuilder.AddAzureBlobGrainStorage(
+        name: "cartStore",
+        configureOptions: options =>
+        {
+            options.BlobServiceClient = new BlobServiceClient(
+                new Uri("https://myaccount.blob.core.windows.net"),
+                new DefaultAzureCredential());
+        });
+    ```
+  </TabItem>
+  <TabItem label="ADO.NET">
+    **Package:** `Microsoft.Orleans.Persistence.AdoNet`
+
+    ```csharp
+    siloBuilder.AddAdoNetGrainStorage(
+        name: "Default",
+        configureOptions: options =>
+        {
+            options.Invariant = "Microsoft.Data.SqlClient";
+            options.ConnectionString = "Server=localhost;Database=Orleans;...";
+        });
+    ```
+  </TabItem>
+  <TabItem label="Memory">
+    **Package:** `Microsoft.Orleans.Persistence.Memory` (included in `Microsoft.Orleans.Server`)
+
+    ```csharp
+    siloBuilder.AddMemoryGrainStorage(name: "Default");
+    ```
+
+    <Aside type="caution">
+      Memory storage is **not durable** — all state is lost when the silo shuts down. Use it only for development and testing.
+    </Aside>
+  </TabItem>
+</Tabs>
+
+### Using Aspire
+
+If you're using .NET Aspire (as in the [Getting Started](/guides/getting-started/) guide), storage providers are configured through the AppHost and injected automatically:
+
+```csharp
+// AppHost/Program.cs
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainStorage("Default", redis);
+```
+
+The silo picks up the storage configuration from Aspire without any additional code.
+
+## Error Handling
+
+Storage operations can fail. Orleans handles read and write failures differently:
+
+- **Read failures during activation** — If a storage provider fails to read state when a grain activates, the activation fails entirely. `OnActivateAsync` is never called and the caller receives a fault.
+- **Write failures** — Exceptions from `WriteStateAsync` propagate to the caller. If your grain has error-handling or recovery logic, catch the exception and handle it within the grain method. If you swallow the exception (don't rethrow), Orleans considers the write error handled.
+- **Missing provider** — If a grain references a storage provider that was never configured, any message sent to that grain returns a `BadProviderConfigException`.
+
+```csharp
+public async Task SafeUpdate(string name)
+{
+    _state.State.Name = name;
+
+    try
+    {
+        await _state.WriteStateAsync();
+    }
+    catch (Exception ex)
+    {
+        // Log and handle the failure — the caller won't see an error
+        _logger.LogError(ex, "Failed to persist state");
+    }
+}
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Getting Started" icon="rocket">
+    New to Orleans? Start with the full setup guide using .NET Aspire.
+    [Get started](/guides/getting-started/)
+  </Card>
+  <Card title="Timers and Reminders" icon="setting">
+    Schedule periodic work inside grains using timers for short-lived tasks and reminders for durable scheduling.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/grains/timers-and-reminders)
+  </Card>
+  <Card title="Streaming" icon="rocket">
+    Build reactive pipelines with Orleans Streams for real-time event processing.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/streaming/)
+  </Card>
+  <Card title="Custom Storage Providers" icon="document">
+    Build your own storage provider by implementing the `IGrainStorage` interface.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/tutorials-and-samples/custom-grain-storage)
+  </Card>
+</CardGrid>
