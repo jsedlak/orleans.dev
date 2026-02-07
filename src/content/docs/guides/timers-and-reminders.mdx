@@ -1,0 +1,350 @@
+---
+title: Timers and Reminders
+description: Schedule periodic work inside grains using timers for short-lived tasks and reminders for durable scheduling.
+---
+
+import { Steps, Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+
+Orleans provides two mechanisms for scheduling periodic behavior inside grains: **timers** and **reminders**. Both allow grains to perform recurring work, but they differ in durability, resolution, and lifecycle.
+
+| Feature | Timers | Reminders |
+|---|---|---|
+| Survives grain deactivation | No | Yes |
+| Survives silo restarts | No | Yes |
+| Requires storage provider | No | Yes |
+| Suitable resolution | Seconds to minutes | Minutes to days |
+| Default interleaving | No | Same as grain methods |
+
+## Timers
+
+Timers create periodic behavior scoped to a single grain activation. When the activation is deactivated or the silo crashes, the timer stops. Each activation can have zero or more timers, and the runtime executes each timer callback within the single-threaded context of its associated activation.
+
+### Registering a Timer
+
+Use the `RegisterGrainTimer` method (introduced in Orleans 8.0) to start a timer. It returns an `IGrainTimer` reference you can use to modify or dispose the timer later.
+
+```csharp
+public class PollingGrain : Grain, IPollingGrain
+{
+    private IGrainTimer? _timer;
+
+    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _timer = RegisterGrainTimer(
+            callback: static (state, cancellationToken) =>
+            {
+                state.Logger.LogInformation("Timer tick at {Time}", DateTime.UtcNow);
+                return Task.CompletedTask;
+            },
+            state: this,
+            options: new GrainTimerCreationOptions
+            {
+                DueTime = TimeSpan.FromSeconds(2),
+                Period = TimeSpan.FromSeconds(5)
+            });
+
+        return base.OnActivateAsync(cancellationToken);
+    }
+
+    private ILogger Logger =>
+        this.GetServiceProvider().GetRequiredService<ILoggerFactory>()
+            .CreateLogger<PollingGrain>();
+}
+```
+
+### GrainTimerCreationOptions
+
+| Property | Type | Description |
+|---|---|---|
+| `DueTime` | `TimeSpan` | Time to wait before the first callback invocation. |
+| `Period` | `TimeSpan` | Interval between successive callback invocations. |
+| `Interleave` | `bool` | When `true`, timer callbacks can interleave with other timers and grain calls. Default: `false`. |
+| `KeepAlive` | `bool` | When `true`, timer callbacks extend the grain activation's lifetime, preventing idle deactivation. Default: `false`. |
+
+### Timer Behavior
+
+- **Non-overlapping**: The `Period` is measured from the moment the previous callback `Task` completes, not from when it started. Successive calls never overlap.
+- **Single-threaded**: Callbacks run within the grain's activation context and respect the single-threaded execution model.
+- **Updatable**: Call `_timer.Change(newDueTime, newPeriod)` to adjust the timer schedule after creation.
+- **Cancellation-aware**: The callback receives a `CancellationToken` that is canceled when the timer is disposed or the grain deactivates.
+- **Observable**: Timer callbacks are subject to grain call filters and are visible in distributed tracing.
+- **Self-disposing**: A callback can dispose the `IGrainTimer` that fired it.
+
+<Aside type="caution">
+  Timer callbacks do **not** keep the grain activation alive by default. If you need the timer to prevent idle deactivation, set `KeepAlive = true` in `GrainTimerCreationOptions`.
+</Aside>
+
+### Migrating from RegisterTimer
+
+The legacy `RegisterTimer` method is obsolete as of Orleans 8.2. The key difference is that `RegisterTimer` callbacks **interleaved by default**, while `RegisterGrainTimer` callbacks **do not**. If your grain depends on interleaving, set `Interleave = true` to preserve the old behavior.
+
+```csharp
+// Before (Orleans 7.x) — obsolete
+_timer = RegisterTimer(
+    DoWorkAsync, null,
+    TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10));
+
+// After (Orleans 8.x+)
+_timer = RegisterGrainTimer(
+    callback: static (state, ct) => state.DoWorkAsync(),
+    state: this,
+    options: new GrainTimerCreationOptions
+    {
+        DueTime = TimeSpan.FromSeconds(5),
+        Period = TimeSpan.FromSeconds(10),
+        Interleave = true // preserve old behavior
+    });
+```
+
+## Reminders
+
+Reminders are **persistent** and continue to trigger across grain deactivations, silo restarts, and even partial cluster failures. They are written to a durable storage provider and are associated with the grain identity, not a specific activation.
+
+When a reminder ticks:
+
+1. If the grain has an active activation, the reminder is delivered to it.
+2. If the grain is **not** activated, Orleans creates a new activation and delivers the reminder.
+
+<Aside>
+  Reminder definitions are persisted, but individual tick occurrences are not. If the entire cluster is down when a reminder is due, that tick is missed — only the next scheduled tick fires.
+</Aside>
+
+### Configuring Reminder Storage
+
+Reminders require a storage provider. Configure one using the `Use{X}ReminderService` extension methods on the silo builder.
+
+<Tabs>
+  <TabItem label="Redis">
+    ```csharp
+    builder.UseRedisReminderService(options =>
+    {
+        options.ConfigurationOptions = new()
+        {
+            EndPoints = { "localhost:6379" }
+        };
+    });
+    ```
+  </TabItem>
+  <TabItem label="Azure Tables">
+    ```csharp
+    builder.UseAzureTableReminderService(options =>
+    {
+        options.ConfigureTableServiceClient("DefaultEndpointsProtocol=...");
+    });
+    ```
+  </TabItem>
+  <TabItem label="ADO.NET">
+    ```csharp
+    builder.UseAdoNetReminderService(options =>
+    {
+        options.ConnectionString = "Server=...";
+        options.Invariant = "Microsoft.Data.SqlClient";
+    });
+    ```
+  </TabItem>
+  <TabItem label="In-Memory">
+    ```csharp
+    builder.UseInMemoryReminderService();
+    ```
+
+    <Aside type="caution">
+      In-memory reminders are lost when the silo restarts. Only use this for local development and testing.
+    </Aside>
+  </TabItem>
+</Tabs>
+
+When using **.NET Aspire**, configure reminders declaratively in your AppHost:
+
+```csharp
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithReminders(redis);
+
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WaitFor(redis);
+```
+
+<Aside type="tip">
+  If you have a heterogeneous cluster where silos handle different grain types, every silo must include the reminder storage configuration.
+</Aside>
+
+### Implementing a Reminder Grain
+
+A grain that uses reminders must implement the `IRemindable` interface. The `ReceiveReminder` method is called each time a reminder fires.
+
+```csharp
+public class ReportGrain : Grain, IReportGrain, IRemindable
+{
+    private IGrainReminder? _reminder;
+
+    public async Task StartReporting()
+    {
+        _reminder = await RegisterOrUpdateReminder(
+            reminderName: "DailyReport",
+            dueTime: TimeSpan.Zero,
+            period: TimeSpan.FromHours(24));
+    }
+
+    public async Task StopReporting()
+    {
+        if (_reminder is not null)
+        {
+            await UnregisterReminder(_reminder);
+            _reminder = null;
+        }
+    }
+
+    public Task ReceiveReminder(string reminderName, TickStatus status)
+    {
+        if (reminderName == "DailyReport")
+        {
+            // Generate and send the daily report
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+### Reminder API
+
+| Method | Description |
+|---|---|
+| `RegisterOrUpdateReminder(name, dueTime, period)` | Creates or updates a named reminder. Returns `IGrainReminder`. |
+| `UnregisterReminder(reminder)` | Cancels a reminder. Requires the `IGrainReminder` handle. |
+| `GetReminder(name)` | Retrieves a reminder by name. Useful for getting a handle after reactivation. |
+| `GetReminders()` | Returns all reminders registered for the grain. |
+
+<Aside>
+  `IGrainReminder` handles are not guaranteed to be valid across activations. If you need to cancel a reminder after the grain reactivates, retrieve a fresh handle using `GetReminder(name)`.
+</Aside>
+
+### Recovering a Reminder Handle
+
+Since reminders outlive activations, you may need to recover a handle to manage a previously registered reminder:
+
+```csharp
+public override async Task OnActivateAsync(CancellationToken cancellationToken)
+{
+    _reminder = await GetReminder("DailyReport");
+    await base.OnActivateAsync(cancellationToken);
+}
+```
+
+## POCO Grain Registration
+
+POCO grains (grains that don't inherit from `Grain`) can register timers and reminders by implementing `IGrainBase` and injecting `ITimerRegistry` or `IReminderRegistry`:
+
+```csharp
+using Orleans.Timers;
+
+public sealed class PingGrain : IGrainBase, IPingGrain, IDisposable
+{
+    private const string ReminderName = "ExampleReminder";
+
+    private readonly IReminderRegistry _reminderRegistry;
+    private IGrainReminder? _reminder;
+
+    public IGrainContext GrainContext { get; }
+
+    public PingGrain(
+        ITimerRegistry timerRegistry,
+        IReminderRegistry reminderRegistry,
+        IGrainContext grainContext)
+    {
+        timerRegistry.RegisterGrainTimer(
+            grainContext,
+            callback: static async (state, cancellationToken) =>
+            {
+                // Periodic timer work
+                await Task.CompletedTask;
+            },
+            state: this,
+            options: new GrainTimerCreationOptions
+            {
+                DueTime = TimeSpan.FromSeconds(3),
+                Period = TimeSpan.FromSeconds(10)
+            });
+
+        _reminderRegistry = reminderRegistry;
+        GrainContext = grainContext;
+    }
+
+    public async Task Ping()
+    {
+        _reminder = await _reminderRegistry.RegisterOrUpdateReminder(
+            callingGrainId: GrainContext.GrainId,
+            reminderName: ReminderName,
+            dueTime: TimeSpan.Zero,
+            period: TimeSpan.FromHours(1));
+    }
+
+    public void Dispose()
+    {
+        if (_reminder is not null)
+        {
+            _reminderRegistry.UnregisterReminder(
+                GrainContext.GrainId, _reminder);
+        }
+    }
+}
+```
+
+## When to Use Which
+
+**Use timers when:**
+
+- The task is short-lived and doesn't need to survive grain deactivation or silo failures.
+- You need fine-grained resolution (seconds or minutes).
+- The timer is started from `OnActivateAsync` or a grain method call.
+
+**Use reminders when:**
+
+- The periodic behavior must survive across activations, deactivations, and failures.
+- The task is infrequent — measured in minutes, hours, or days.
+
+**Combine both** when you need a high-resolution timer that also survives failures. Register a reminder that fires every few minutes; in its callback, start a local timer that does the fine-grained work. If the grain deactivates and the timer is lost, the next reminder tick reactivates the grain and restarts the timer.
+
+```csharp
+public class ResilientPollerGrain : Grain, IResilientPollerGrain, IRemindable
+{
+    private IGrainTimer? _timer;
+
+    public async Task Start()
+    {
+        // Reminder fires every 5 minutes to ensure the grain stays active
+        await RegisterOrUpdateReminder("KeepAlive",
+            dueTime: TimeSpan.Zero,
+            period: TimeSpan.FromMinutes(5));
+
+        StartTimer();
+    }
+
+    public Task ReceiveReminder(string reminderName, TickStatus status)
+    {
+        // Restart the timer in case it was lost due to deactivation
+        StartTimer();
+        return Task.CompletedTask;
+    }
+
+    private void StartTimer()
+    {
+        _timer ??= RegisterGrainTimer(
+            callback: static (state, ct) =>
+            {
+                // Fine-grained polling every 10 seconds
+                return Task.CompletedTask;
+            },
+            state: this,
+            options: new GrainTimerCreationOptions
+            {
+                DueTime = TimeSpan.Zero,
+                Period = TimeSpan.FromSeconds(10),
+                KeepAlive = true
+            });
+    }
+}
+```
