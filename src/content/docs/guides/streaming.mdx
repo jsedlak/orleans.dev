@@ -1,0 +1,398 @@
+---
+title: Streaming
+description: Build reactive, event-driven pipelines with Orleans Streams for real-time processing.
+---
+
+import { Steps, Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Orleans Streams provide a framework for building reactive, event-driven applications. Streams let grains produce and consume ordered sequences of events using simple APIs modeled after [Reactive Extensions (Rx)](https://github.com/dotnet/reactive). The streaming runtime handles delivery, persistence of subscriptions, and balancing of load across the cluster.
+
+Key concepts:
+
+- **Streams** — virtual, always-existing channels identified by a provider name, namespace, and key.
+- **Stream Providers** — pluggable backends that control how events are transported and persisted (memory, Azure Event Hubs, Azure Queues, AWS SQS).
+- **Subscriptions** — either **explicit** (grain subscribes in code) or **implicit** (grain subscribes automatically via an attribute).
+
+## Prerequisites
+
+This guide builds on the solution created in the [Getting Started](/guides/getting-started/) guide. You should have a working Aspire + Orleans application with:
+
+- An **AppHost** project
+- A **Silo** project
+- A **Grains** project
+
+## 1. Add Streaming Packages
+
+Add the memory stream support to the **Silo** project. Memory streams use Orleans grain messaging to deliver events and are ideal for development and testing.
+
+```bash
+dotnet add MyApp.Silo package Microsoft.Orleans.Streaming
+```
+
+<Aside type="tip">
+  Memory streams are built into `Microsoft.Orleans.Server` for development use. For production workloads, use a durable provider like Azure Event Hubs or Azure Queue Storage.
+</Aside>
+
+## 2. Configure the Stream Provider
+
+### Silo Configuration
+
+Add memory streams and the required PubSub storage in **`MyApp.Silo/Program.cs`**:
+
+<Tabs>
+  <TabItem label="Worker Host">
+    ```csharp
+    var builder = Host.CreateApplicationBuilder(args);
+
+    builder.AddServiceDefaults();
+    builder.AddKeyedRedisClient("redis");
+
+    builder.UseOrleans(siloBuilder =>
+    {
+        siloBuilder
+            .AddMemoryStreams("StreamProvider")
+            .AddMemoryGrainStorage("PubSubStore");
+    });
+
+    builder.Build().Run();
+    ```
+  </TabItem>
+  <TabItem label="Web Host">
+    ```csharp
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.AddServiceDefaults();
+    builder.AddKeyedRedisClient("redis");
+
+    builder.UseOrleans(siloBuilder =>
+    {
+        siloBuilder
+            .AddMemoryStreams("StreamProvider")
+            .AddMemoryGrainStorage("PubSubStore");
+    });
+
+    var app = builder.Build();
+    // ... map endpoints
+    app.Run();
+    ```
+  </TabItem>
+</Tabs>
+
+<Aside>
+  The `PubSubStore` is required by the streaming runtime to persist subscription metadata. With memory streams, `AddMemoryGrainStorage` is sufficient. For production, use a durable storage provider.
+</Aside>
+
+## 3. Define a Producer Grain
+
+Create a grain that publishes events to a stream. In this example, a `SensorGrain` periodically emits temperature readings.
+
+**`MyApp.Grains/ISensorGrain.cs`**
+
+```csharp
+using Orleans;
+
+namespace MyApp.Grains;
+
+public interface ISensorGrain : IGrainWithStringKey
+{
+    ValueTask StartProducing();
+    ValueTask StopProducing();
+}
+```
+
+**`MyApp.Grains/SensorGrain.cs`**
+
+```csharp
+using Orleans;
+using Orleans.Streams;
+
+namespace MyApp.Grains;
+
+public class SensorGrain : Grain, ISensorGrain
+{
+    private IAsyncStream<double>? _stream;
+    private IDisposable? _timer;
+
+    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        var streamProvider = this.GetStreamProvider("StreamProvider");
+        var streamId = StreamId.Create("SensorData", this.GetPrimaryKeyString());
+        _stream = streamProvider.GetStream<double>(streamId);
+
+        return base.OnActivateAsync(cancellationToken);
+    }
+
+    public ValueTask StartProducing()
+    {
+        _timer = this.RegisterGrainTimer(
+            async _ => await _stream!.OnNextAsync(Random.Shared.NextDouble() * 100),
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1));
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask StopProducing()
+    {
+        _timer?.Dispose();
+        _timer = null;
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+The producer obtains a stream handle using the stream provider and a `StreamId`. It then calls `OnNextAsync` to publish events. The `StreamId` combines a namespace (`"SensorData"`) with a key that identifies the specific stream.
+
+## 4. Define a Consumer Grain
+
+Consumers subscribe to streams to receive events. Orleans supports two subscription models.
+
+### Implicit Subscriptions
+
+With implicit subscriptions, the `[ImplicitStreamSubscription]` attribute tells Orleans to automatically activate a grain and deliver events whenever a matching stream has data. The grain's identity (primary key) is mapped directly from the stream key.
+
+**`MyApp.Grains/ISensorConsumerGrain.cs`**
+
+```csharp
+using Orleans;
+
+namespace MyApp.Grains;
+
+public interface ISensorConsumerGrain : IGrainWithStringKey
+{
+    ValueTask<double> GetLastReading();
+}
+```
+
+**`MyApp.Grains/SensorConsumerGrain.cs`**
+
+```csharp
+using Orleans;
+using Orleans.Streams;
+
+namespace MyApp.Grains;
+
+[ImplicitStreamSubscription("SensorData")]
+public class SensorConsumerGrain : Grain, ISensorConsumerGrain
+{
+    private double _lastReading;
+
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        var streamProvider = this.GetStreamProvider("StreamProvider");
+        var streamId = StreamId.Create("SensorData", this.GetPrimaryKeyString());
+        var stream = streamProvider.GetStream<double>(streamId);
+
+        await stream.SubscribeAsync<double>(
+            async (reading, token) =>
+            {
+                _lastReading = reading;
+                await Task.CompletedTask;
+            });
+
+        await base.OnActivateAsync(cancellationToken);
+    }
+
+    public ValueTask<double> GetLastReading() =>
+        ValueTask.FromResult(_lastReading);
+}
+```
+
+<Aside type="tip">
+  With implicit subscriptions, the stream namespace in the attribute (`"SensorData"`) must match the namespace used by the producer when creating the `StreamId`. The runtime automatically maps stream `<Key, "SensorData">` to a consumer grain with the same key.
+</Aside>
+
+### Explicit Subscriptions
+
+With explicit subscriptions, the grain subscribes programmatically. This gives you control over when to subscribe, how many subscriptions to create, and when to unsubscribe. Explicit subscriptions survive grain deactivation, so you must reattach processing logic when the grain reactivates.
+
+```csharp
+public class MonitorGrain : Grain, IMonitorGrain
+{
+    public async ValueTask Subscribe(string sensorKey)
+    {
+        var streamProvider = this.GetStreamProvider("StreamProvider");
+        var streamId = StreamId.Create("SensorData", sensorKey);
+        var stream = streamProvider.GetStream<double>(streamId);
+
+        await stream.SubscribeAsync<double>(
+            async (reading, token) =>
+            {
+                // Process reading
+                await Task.CompletedTask;
+            });
+    }
+
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        var streamProvider = this.GetStreamProvider("StreamProvider");
+        var streamId = StreamId.Create("SensorData", this.GetPrimaryKeyString());
+        var stream = streamProvider.GetStream<double>(streamId);
+
+        // Reattach processing logic to existing subscriptions
+        var handles = await stream.GetAllSubscriptionHandles();
+        foreach (var handle in handles)
+        {
+            await handle.ResumeAsync<double>(
+                async (reading, token) =>
+                {
+                    // Process reading
+                    await Task.CompletedTask;
+                });
+        }
+
+        await base.OnActivateAsync(cancellationToken);
+    }
+}
+```
+
+### Comparing Subscription Models
+
+| Feature | Implicit | Explicit |
+|---|---|---|
+| Subscription mechanism | `[ImplicitStreamSubscription]` attribute | `stream.SubscribeAsync()` call |
+| Grain activation | Automatic on first event | Manual — grain must already be active |
+| Unsubscribe | Not supported | `handle.UnsubscribeAsync()` |
+| Multiple subscriptions | One per namespace | Multiple allowed |
+| Reattach on reactivation | Attach observer in `OnActivateAsync` | Reattach via `ResumeAsync` in `OnActivateAsync` |
+
+## 5. Add an API Endpoint
+
+To trigger streaming from an HTTP endpoint, extend the silo's web host:
+
+**`MyApp.Silo/Program.cs`** (add these endpoints)
+
+```csharp
+app.MapPost("/sensors/{id}/start", async (IGrainFactory grains, string id) =>
+{
+    var grain = grains.GetGrain<ISensorGrain>(id);
+    await grain.StartProducing();
+    return Results.Ok(new { sensor = id, status = "producing" });
+});
+
+app.MapPost("/sensors/{id}/stop", async (IGrainFactory grains, string id) =>
+{
+    var grain = grains.GetGrain<ISensorGrain>(id);
+    await grain.StopProducing();
+    return Results.Ok(new { sensor = id, status = "stopped" });
+});
+
+app.MapGet("/sensors/{id}/reading", async (IGrainFactory grains, string id) =>
+{
+    var grain = grains.GetGrain<ISensorConsumerGrain>(id);
+    var reading = await grain.GetLastReading();
+    return Results.Ok(new { sensor = id, reading });
+});
+```
+
+Start the application and test it:
+
+```bash
+# Start producing sensor data
+curl -X POST http://localhost:5000/sensors/sensor-1/start
+
+# Read the latest value (consumer grain activates automatically)
+curl http://localhost:5000/sensors/sensor-1/reading
+# {"sensor":"sensor-1","reading":42.7}
+
+# Stop producing
+curl -X POST http://localhost:5000/sensors/sensor-1/stop
+```
+
+## Stream Providers for Production
+
+Memory streams are not durable and only suitable for development. For production workloads, Orleans provides several stream provider options.
+
+### Azure Event Hubs
+
+High-throughput, partitioned event streaming with replay support.
+
+```bash
+dotnet add MyApp.Silo package Microsoft.Orleans.Streaming.EventHubs
+```
+
+```csharp
+siloBuilder.AddEventHubStreams("EventHubProvider", configurator =>
+{
+    configurator.ConfigureEventHub(options =>
+    {
+        options.ConfigureEventHubConnection(
+            connectionString,
+            eventHubName,
+            consumerGroup);
+    });
+    configurator.UseAzureTableCheckpointer(options =>
+    {
+        options.ConfigureTableServiceClient(storageConnectionString);
+    });
+});
+```
+
+### Azure Queue Storage
+
+Simple, cost-effective queue-based streaming.
+
+```bash
+dotnet add MyApp.Silo package Microsoft.Orleans.Streaming.AzureStorage
+```
+
+```csharp
+siloBuilder.AddAzureQueueStreams("AzureQueueProvider", configurator =>
+{
+    configurator.ConfigureAzureQueue(options =>
+    {
+        options.ConfigureQueueServiceClient(storageConnectionString);
+    });
+});
+```
+
+### AWS SQS
+
+Queue-based streaming using Amazon Simple Queue Service.
+
+```bash
+dotnet add MyApp.Silo package Microsoft.Orleans.Streaming.SQS
+```
+
+```csharp
+siloBuilder.AddSqsStreams("SQSProvider", options =>
+{
+    options.AccessKey = "your-access-key";
+    options.SecretKey = "your-secret-key";
+    options.Region = "us-east-1";
+});
+```
+
+### Provider Comparison
+
+| Provider | Durability | Throughput | Rewindable | Best For |
+|---|---|---|---|---|
+| Memory | None | High | No | Development and testing |
+| Azure Event Hubs | High | Very high | Yes | High-throughput event processing |
+| Azure Queue Storage | High | Moderate | No | Cost-effective workloads |
+| AWS SQS | High | Moderate | No | AWS-hosted applications |
+
+<Aside>
+  All durable stream providers require a `PubSubStore` grain storage provider. For production, use a persistent storage backend like Azure Tables or Redis instead of `AddMemoryGrainStorage`.
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Grain Persistence" icon="document">
+    Add durable state to grains with `[PersistentState]` so data survives grain deactivation.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/grains/grain-persistence/)
+  </Card>
+  <Card title="Stream Providers in Depth" icon="open-book">
+    Explore the full stream provider architecture and implementation details.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/implementation/streams-implementation/)
+  </Card>
+  <Card title="Streaming API Reference" icon="setting">
+    Full reference for `IAsyncStream`, `IAsyncObserver`, subscription handles, and sequence tokens.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/streaming/streams-programming-apis)
+  </Card>
+  <Card title="Timers and Reminders" icon="setting">
+    Schedule periodic work inside grains using timers for short-lived tasks and reminders for durable scheduling.
+    [Learn more](https://learn.microsoft.com/en-us/dotnet/orleans/grains/timers-and-reminders)
+  </Card>
+</CardGrid>

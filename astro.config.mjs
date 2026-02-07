@@ -21,6 +21,8 @@ export default defineConfig({
             // Each item here is one entry in the navigation menu.
             { label: "Getting Started", slug: "guides/getting-started" },
             { label: "Grain Persistence", slug: "guides/grain-persistence" },
+            { label: "Streaming", slug: "guides/streaming" },
+            { label: "Timers and Reminders", slug: "guides/timers-and-reminders" },
           ],
         },
         {
