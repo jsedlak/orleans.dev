@@ -1,0 +1,262 @@
+---
+title: ADO.NET
+description: Use SQL Server, PostgreSQL, MySQL, or MariaDB as providers for Orleans clustering, grain persistence, and reminders.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+The ADO.NET providers let you use relational databases as Orleans backends. This is a good choice when your infrastructure already includes a SQL database and you want to minimize external dependencies. Supported databases include SQL Server, PostgreSQL, MySQL, and MariaDB.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Microsoft.Orleans.Clustering.AdoNet` |
+| Grain Persistence | `Microsoft.Orleans.Persistence.AdoNet` |
+| Reminders | `Microsoft.Orleans.Reminders.AdoNet` |
+
+## Installation
+
+```bash
+# Clustering
+dotnet add package Microsoft.Orleans.Clustering.AdoNet
+
+# Persistence
+dotnet add package Microsoft.Orleans.Persistence.AdoNet
+
+# Reminders
+dotnet add package Microsoft.Orleans.Reminders.AdoNet
+```
+
+You also need the ADO.NET driver for your database:
+
+```bash
+# SQL Server
+dotnet add package Microsoft.Data.SqlClient
+
+# PostgreSQL
+dotnet add package Npgsql
+
+# MySQL / MariaDB
+dotnet add package MySql.Data
+```
+
+## Database Setup
+
+Before using any ADO.NET provider, you must create the required tables and stored procedures by running the Orleans SQL scripts against your database. These scripts are included in the NuGet packages and are also available on GitHub.
+
+<Tabs>
+  <TabItem label="SQL Server">
+    Run the scripts from the [Orleans GitHub repository](https://github.com/dotnet/orleans/tree/main/src/AdoNet):
+    - `SQLServer-Main.sql` — Main tables
+    - `SQLServer-Clustering.sql` — Clustering tables
+    - `SQLServer-Persistence.sql` — Persistence tables
+    - `SQLServer-Reminders.sql` — Reminder tables
+  </TabItem>
+  <TabItem label="PostgreSQL">
+    Run the scripts from the [Orleans GitHub repository](https://github.com/dotnet/orleans/tree/main/src/AdoNet):
+    - `PostgreSQL-Main.sql` — Main tables
+    - `PostgreSQL-Clustering.sql` — Clustering tables
+    - `PostgreSQL-Persistence.sql` — Persistence tables
+    - `PostgreSQL-Reminders.sql` — Reminder tables
+  </TabItem>
+  <TabItem label="MySQL">
+    Run the scripts from the [Orleans GitHub repository](https://github.com/dotnet/orleans/tree/main/src/AdoNet):
+    - `MySQL-Main.sql` — Main tables
+    - `MySQL-Clustering.sql` — Clustering tables
+    - `MySQL-Persistence.sql` — Persistence tables
+    - `MySQL-Reminders.sql` — Reminder tables
+  </TabItem>
+</Tabs>
+
+<Aside type="caution">
+  You must run the setup scripts before starting your silo. Unlike some other providers, ADO.NET providers do not create tables automatically.
+</Aside>
+
+## ADO.NET Invariant Names
+
+Each database requires a specific **invariant** string that identifies the ADO.NET driver:
+
+| Database | Invariant |
+|---|---|
+| SQL Server | `System.Data.SqlClient` or `Microsoft.Data.SqlClient` |
+| PostgreSQL | `Npgsql` |
+| MySQL / MariaDB | `MySql.Data.MySqlClient` |
+
+## Clustering
+
+<Tabs>
+  <TabItem label="SQL Server">
+    ```csharp
+    siloBuilder.UseAdoNetClustering(options =>
+    {
+        options.Invariant = "Microsoft.Data.SqlClient";
+        options.ConnectionString =
+            "Server=localhost;Database=Orleans;Integrated Security=True;";
+    });
+    ```
+  </TabItem>
+  <TabItem label="PostgreSQL">
+    ```csharp
+    siloBuilder.UseAdoNetClustering(options =>
+    {
+        options.Invariant = "Npgsql";
+        options.ConnectionString =
+            "Host=localhost;Database=Orleans;Username=orleans;Password=secret;";
+    });
+    ```
+  </TabItem>
+  <TabItem label="MySQL">
+    ```csharp
+    siloBuilder.UseAdoNetClustering(options =>
+    {
+        options.Invariant = "MySql.Data.MySqlClient";
+        options.ConnectionString =
+            "Server=localhost;Database=Orleans;Uid=orleans;Pwd=secret;";
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+Client configuration follows the same pattern:
+
+```csharp
+clientBuilder.UseAdoNetClustering(options =>
+{
+    options.Invariant = "Npgsql";
+    options.ConnectionString =
+        "Host=localhost;Database=Orleans;Username=orleans;Password=secret;";
+});
+```
+
+## Grain Persistence
+
+<Tabs>
+  <TabItem label="SQL Server">
+    ```csharp
+    siloBuilder.AddAdoNetGrainStorage(
+        name: "sqlStore",
+        configureOptions: options =>
+        {
+            options.Invariant = "Microsoft.Data.SqlClient";
+            options.ConnectionString =
+                "Server=localhost;Database=Orleans;Integrated Security=True;";
+        });
+    ```
+  </TabItem>
+  <TabItem label="PostgreSQL">
+    ```csharp
+    siloBuilder.AddAdoNetGrainStorage(
+        name: "pgStore",
+        configureOptions: options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString =
+                "Host=localhost;Database=Orleans;Username=orleans;Password=secret;";
+        });
+    ```
+  </TabItem>
+  <TabItem label="MySQL">
+    ```csharp
+    siloBuilder.AddAdoNetGrainStorage(
+        name: "mysqlStore",
+        configureOptions: options =>
+        {
+            options.Invariant = "MySql.Data.MySqlClient";
+            options.ConnectionString =
+                "Server=localhost;Database=Orleans;Uid=orleans;Pwd=secret;";
+        });
+    ```
+  </TabItem>
+</Tabs>
+
+See the [Grain Persistence](/guides/grain-persistence/) guide for usage patterns with `[PersistentState]`.
+
+## Reminders
+
+<Tabs>
+  <TabItem label="SQL Server">
+    ```csharp
+    siloBuilder.UseAdoNetReminderService(options =>
+    {
+        options.Invariant = "Microsoft.Data.SqlClient";
+        options.ConnectionString =
+            "Server=localhost;Database=Orleans;Integrated Security=True;";
+    });
+    ```
+  </TabItem>
+  <TabItem label="PostgreSQL">
+    ```csharp
+    siloBuilder.UseAdoNetReminderService(options =>
+    {
+        options.Invariant = "Npgsql";
+        options.ConnectionString =
+            "Host=localhost;Database=Orleans;Username=orleans;Password=secret;";
+    });
+    ```
+  </TabItem>
+  <TabItem label="MySQL">
+    ```csharp
+    siloBuilder.UseAdoNetReminderService(options =>
+    {
+        options.Invariant = "MySql.Data.MySqlClient";
+        options.ConnectionString =
+            "Server=localhost;Database=Orleans;Uid=orleans;Pwd=secret;";
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+See the [Timers and Reminders](/guides/timers-and-reminders/) guide for usage patterns.
+
+## Complete Example
+
+A full PostgreSQL-backed silo configuration:
+
+```csharp
+const string connectionString =
+    "Host=localhost;Database=Orleans;Username=orleans;Password=secret;";
+const string invariant = "Npgsql";
+
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseAdoNetClustering(options =>
+    {
+        options.Invariant = invariant;
+        options.ConnectionString = connectionString;
+    });
+
+    siloBuilder.AddAdoNetGrainStorage("Default", options =>
+    {
+        options.Invariant = invariant;
+        options.ConnectionString = connectionString;
+    });
+
+    siloBuilder.UseAdoNetReminderService(options =>
+    {
+        options.Invariant = invariant;
+        options.ConnectionString = connectionString;
+    });
+});
+
+builder.Build().Run();
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Redis" icon="redis">
+    In-memory data store for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="Azure Storage" icon="azure">
+    The most comprehensive Azure-native provider, covering six Orleans features.
+    [View docs](/integrations/azure-storage/)
+  </Card>
+  <Card title="Grain Persistence Guide" icon="document">
+    Learn how to add durable state to grains with `[PersistentState]`.
+    [Learn more](/guides/grain-persistence/)
+  </Card>
+</CardGrid>

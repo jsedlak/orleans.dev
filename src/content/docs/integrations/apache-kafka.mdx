@@ -1,0 +1,140 @@
+---
+title: Apache Kafka
+description: Use Apache Kafka as a community-maintained streaming provider for Orleans.
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Apache Kafka is a distributed event streaming platform. The community-maintained `Orleans.Streams.Kafka` package provides an Orleans stream provider backed by Kafka topics using the Confluent client library.
+
+<Aside>
+  This is a **community-maintained** provider from [Orleans.Streams.Kafka](https://github.com/jonathansant/Orleans.Streams.Kafka), not an official Microsoft package.
+</Aside>
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Streaming | `Orleans.Streams.Kafka` |
+
+## Installation
+
+```bash
+dotnet add package Orleans.Streams.Kafka
+```
+
+## Configuration
+
+### Silo
+
+```csharp
+siloBuilder.AddKafkaStreamProvider("KafkaProvider", options =>
+{
+    options.BrokerList = new List<string> { "localhost:9092" };
+    options.ConsumerGroupId = "orleans-consumers";
+    options.Topics = new List<string> { "orders", "notifications" };
+});
+
+// Required: PubSub store for subscription metadata
+siloBuilder.AddMemoryGrainStorage("PubSubStore");
+```
+
+### Client
+
+```csharp
+clientBuilder.AddKafkaStreamProvider("KafkaProvider", options =>
+{
+    options.BrokerList = new List<string> { "localhost:9092" };
+    options.ConsumerGroupId = "orleans-consumers";
+    options.Topics = new List<string> { "orders", "notifications" };
+});
+```
+
+## Configuration Options
+
+| Option | Description | Default |
+|---|---|---|
+| `BrokerList` | List of Kafka broker addresses | Required |
+| `Topics` | List of Kafka topics to subscribe to | Required |
+| `ConsumerGroupId` | Kafka consumer group ID | Required |
+
+## How It Works
+
+The Kafka stream provider maps Kafka topics and partitions to Orleans streams. Each Kafka partition is handled by a pulling agent inside a silo. Events published to a Kafka topic are delivered to Orleans stream consumers.
+
+Key characteristics:
+
+- **Ordering** — Events within a single Kafka partition are delivered in order.
+- **Replay** — Kafka retains events for a configurable retention period (default 7 days). Consumers can replay events from a specific offset.
+- **Scalability** — Add Kafka partitions and Orleans silos to scale throughput horizontally.
+- **Interoperability** — Events published to Kafka by external systems can be consumed by Orleans grains, and vice versa.
+
+<Aside type="tip">
+  Kafka is a strong choice when you need to integrate Orleans with external systems that already produce or consume Kafka events. It works well in multi-cloud and on-premises environments.
+</Aside>
+
+## Producer and Consumer Example
+
+### Producer Grain
+
+```csharp
+public class OrderGrain : Grain, IOrderGrain
+{
+    private IAsyncStream<OrderEvent>? _stream;
+
+    public override Task OnActivateAsync(CancellationToken ct)
+    {
+        var provider = this.GetStreamProvider("KafkaProvider");
+        var streamId = StreamId.Create("orders", this.GetPrimaryKeyString());
+        _stream = provider.GetStream<OrderEvent>(streamId);
+        return base.OnActivateAsync(ct);
+    }
+
+    public async ValueTask Submit(OrderEvent order)
+    {
+        await _stream!.OnNextAsync(order);
+    }
+}
+```
+
+### Implicit Consumer Grain
+
+```csharp
+[ImplicitStreamSubscription("orders")]
+public class OrderProcessorGrain : Grain, IOrderProcessorGrain
+{
+    public override async Task OnActivateAsync(CancellationToken ct)
+    {
+        var provider = this.GetStreamProvider("KafkaProvider");
+        var streamId = StreamId.Create("orders", this.GetPrimaryKeyString());
+        var stream = provider.GetStream<OrderEvent>(streamId);
+
+        await stream.SubscribeAsync<OrderEvent>(
+            async (order, token) =>
+            {
+                // Process the order event
+            });
+
+        await base.OnActivateAsync(ct);
+    }
+}
+```
+
+See the [Streaming](/guides/streaming/) guide for more on implicit vs. explicit subscriptions.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Azure Event Hubs" icon="azure">
+    High-throughput partitioned event streaming with replay support on Azure.
+    [View docs](/integrations/azure-event-hubs/)
+  </Card>
+  <Card title="AWS SQS" icon="setting">
+    Queue-based streaming using Amazon Simple Queue Service.
+    [View docs](/integrations/aws-sqs/)
+  </Card>
+  <Card title="Streaming Guide" icon="rocket">
+    Build reactive pipelines with Orleans Streams for real-time event processing.
+    [Learn more](/guides/streaming/)
+  </Card>
+</CardGrid>

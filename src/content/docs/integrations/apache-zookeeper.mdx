@@ -1,0 +1,86 @@
+---
+title: Apache ZooKeeper
+description: Use Apache ZooKeeper as a clustering provider for Orleans.
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Apache ZooKeeper is a distributed coordination service. Orleans can use ZooKeeper for cluster membership, where each silo registers itself as a ZooKeeper node and the membership protocol leverages ZooKeeper's versioned nodes for concurrency control.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Microsoft.Orleans.OrleansZooKeeperUtils` |
+
+## Installation
+
+```bash
+dotnet add package Microsoft.Orleans.OrleansZooKeeperUtils
+```
+
+## Configuration
+
+### Silo
+
+```csharp
+siloBuilder.UseZooKeeperClustering(options =>
+{
+    options.ConnectionString = "localhost:2181";
+});
+```
+
+### Client
+
+```csharp
+clientBuilder.UseZooKeeperClustering(options =>
+{
+    options.ConnectionString = "localhost:2181";
+});
+```
+
+## How It Works
+
+ZooKeeper stores cluster membership as a tree of nodes (znodes):
+
+- The **deployment ID** is the root znode.
+- Each silo creates a child znode using its identity (`ip:port@epoch`).
+- Concurrency control uses ZooKeeper's built-in node versioning to prevent conflicting membership updates.
+- Ephemeral nodes are used for failure detection — if a silo loses its ZooKeeper session, its node is automatically removed.
+
+## Configuration Options
+
+| Option | Description | Default |
+|---|---|---|
+| `ConnectionString` | Comma-separated list of ZooKeeper hosts (e.g., `host1:2181,host2:2181`) | Required |
+
+<Aside type="tip">
+  For high availability, use a ZooKeeper ensemble (at least 3 nodes). Pass all hosts in the connection string so the client can failover if one node is unavailable.
+</Aside>
+
+## When to Use ZooKeeper
+
+ZooKeeper is a good choice when:
+
+- Your infrastructure already runs ZooKeeper (e.g., for Hadoop, Kafka, or other services).
+- You need a proven, battle-tested coordination service for clustering.
+- You prefer an on-premises solution over cloud-managed services.
+
+For new deployments without existing ZooKeeper infrastructure, [Redis](/integrations/redis/) or a cloud-native provider like [Azure Storage](/integrations/azure-storage/) is typically simpler to set up and operate.
+
+## Next Steps
+
+<CardGrid>
+  <Card title="HashiCorp Consul" icon="setting">
+    Another on-premises clustering option using Consul's Key/Value store.
+    [View docs](/integrations/hashicorp-consul/)
+  </Card>
+  <Card title="Redis" icon="redis">
+    Cloud-agnostic provider for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="Integrations Overview" icon="open-book">
+    Compare all available Orleans providers side by side.
+    [View docs](/integrations/)
+  </Card>
+</CardGrid>

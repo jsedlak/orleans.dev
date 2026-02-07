@@ -1,0 +1,193 @@
+---
+title: Azure Event Hubs
+description: Use Azure Event Hubs as a high-throughput streaming provider for Orleans.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Azure Event Hubs is a fully managed event streaming platform capable of processing millions of events per second. The Orleans Event Hubs stream provider delivers partitioned, ordered, and rewindable event streams.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Streaming | `Microsoft.Orleans.Streaming.EventHubs` |
+
+## Installation
+
+```bash
+dotnet add package Microsoft.Orleans.Streaming.EventHubs
+```
+
+You also need a checkpointing store (typically Azure Table Storage) and a PubSub store for subscription metadata:
+
+```bash
+dotnet add package Microsoft.Orleans.Persistence.AzureStorage
+```
+
+## Configuration
+
+### Silo
+
+```csharp
+siloBuilder.AddEventHubStreams("EventHubProvider", configurator =>
+{
+    configurator.ConfigureEventHub(options =>
+    {
+        options.ConfigureEventHubConnection(
+            "YOUR_EVENT_HUB_CONNECTION_STRING",
+            "YOUR_EVENT_HUB_NAME",
+            "$Default");
+    });
+
+    configurator.UseAzureTableCheckpointer(options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+});
+
+// Required: PubSub store for subscription metadata
+siloBuilder.AddAzureTableGrainStorage("PubSubStore", options =>
+{
+    options.TableServiceClient = new TableServiceClient(
+        new Uri("https://ACCOUNT.table.core.windows.net"),
+        new DefaultAzureCredential());
+});
+```
+
+### Client
+
+Clients can produce events by obtaining a stream reference through the cluster client:
+
+```csharp
+clientBuilder.AddEventHubStreams("EventHubProvider", configurator =>
+{
+    configurator.ConfigureEventHub(options =>
+    {
+        options.ConfigureEventHubConnection(
+            "YOUR_EVENT_HUB_CONNECTION_STRING",
+            "YOUR_EVENT_HUB_NAME",
+            "$Default");
+    });
+});
+```
+
+## How It Works
+
+Event Hubs organizes events into **partitions**. Orleans maps partitions to pulling agents running inside silos. Each agent reads events from its assigned partition and delivers them to the appropriate stream consumers.
+
+Key characteristics:
+
+- **Ordering** — Events within a single partition are delivered in order.
+- **Replay** — Event Hubs retains events for a configurable retention period (default 1 day, up to 90 days). Consumers can rewind and replay past events using sequence tokens.
+- **Checkpointing** — The pulling agent periodically writes its current position (offset) to the checkpoint store. After a restart, reading resumes from the last checkpoint.
+- **Throughput** — Each partition supports up to 1 MB/s ingress and 2 MB/s egress. Add more partitions to scale throughput.
+
+<Aside>
+  The number of Event Hub partitions cannot be changed after creation. Plan your partition count based on expected throughput requirements.
+</Aside>
+
+## Checkpointing Options
+
+Checkpointing tracks how far each partition has been read, so processing can resume after a restart without replaying all events.
+
+<Tabs>
+  <TabItem label="Azure Table Storage">
+    ```csharp
+    configurator.UseAzureTableCheckpointer(options =>
+    {
+        options.TableServiceClient = new TableServiceClient(
+            new Uri("https://ACCOUNT.table.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+    ```
+  </TabItem>
+  <TabItem label="Azure Blob Storage">
+    ```csharp
+    configurator.UseAzureBlobCheckpointer(options =>
+    {
+        options.BlobServiceClient = new BlobServiceClient(
+            new Uri("https://ACCOUNT.blob.core.windows.net"),
+            new DefaultAzureCredential());
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+## Producer and Consumer Example
+
+### Producer Grain
+
+```csharp
+public class EventProducerGrain : Grain, IEventProducerGrain
+{
+    private IAsyncStream<OrderEvent>? _stream;
+
+    public override Task OnActivateAsync(CancellationToken ct)
+    {
+        var provider = this.GetStreamProvider("EventHubProvider");
+        var streamId = StreamId.Create("Orders", this.GetPrimaryKeyString());
+        _stream = provider.GetStream<OrderEvent>(streamId);
+        return base.OnActivateAsync(ct);
+    }
+
+    public async ValueTask PlaceOrder(OrderEvent order)
+    {
+        await _stream!.OnNextAsync(order);
+    }
+}
+```
+
+### Implicit Consumer Grain
+
+```csharp
+[ImplicitStreamSubscription("Orders")]
+public class OrderProcessorGrain : Grain, IOrderProcessorGrain
+{
+    public override async Task OnActivateAsync(CancellationToken ct)
+    {
+        var provider = this.GetStreamProvider("EventHubProvider");
+        var streamId = StreamId.Create("Orders", this.GetPrimaryKeyString());
+        var stream = provider.GetStream<OrderEvent>(streamId);
+
+        await stream.SubscribeAsync<OrderEvent>(
+            async (order, token) =>
+            {
+                // Process the order
+            });
+
+        await base.OnActivateAsync(ct);
+    }
+}
+```
+
+See the [Streaming](/guides/streaming/) guide for more on implicit vs. explicit subscriptions.
+
+## When to Use Event Hubs
+
+| Scenario | Recommendation |
+|---|---|
+| High-throughput event processing (>10K events/sec) | Event Hubs |
+| Event replay and reprocessing | Event Hubs |
+| Simple, low-throughput messaging | [Azure Queue Storage](/integrations/azure-storage/) |
+| AWS infrastructure | [AWS SQS](/integrations/aws-sqs/) |
+| Multi-cloud or on-premises | [Apache Kafka](/integrations/apache-kafka/) |
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Streaming Guide" icon="rocket">
+    Build reactive pipelines with Orleans Streams for real-time event processing.
+    [Learn more](/guides/streaming/)
+  </Card>
+  <Card title="Azure Storage" icon="azure">
+    Queue Storage for simpler streaming, plus clustering, persistence, and more.
+    [View docs](/integrations/azure-storage/)
+  </Card>
+  <Card title="Apache Kafka" icon="setting">
+    Community-maintained stream provider for on-premises and multi-cloud setups.
+    [View docs](/integrations/apache-kafka/)
+  </Card>
+</CardGrid>

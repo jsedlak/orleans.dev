@@ -1,0 +1,163 @@
+---
+title: AWS DynamoDB
+description: Use Amazon DynamoDB as a provider for Orleans clustering, grain persistence, and reminders.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Amazon DynamoDB is a fully managed NoSQL database on AWS. Orleans provides DynamoDB providers for clustering, grain persistence, and reminders — making it the primary choice for Orleans deployments on AWS infrastructure.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Microsoft.Orleans.Clustering.DynamoDB` |
+| Grain Persistence | `Microsoft.Orleans.Persistence.DynamoDB` |
+| Reminders | `Microsoft.Orleans.Reminders.DynamoDB` |
+
+## Installation
+
+```bash
+# Clustering
+dotnet add package Microsoft.Orleans.Clustering.DynamoDB
+
+# Persistence
+dotnet add package Microsoft.Orleans.Persistence.DynamoDB
+
+# Reminders
+dotnet add package Microsoft.Orleans.Reminders.DynamoDB
+```
+
+## Clustering
+
+DynamoDB stores silo membership data in a table. Orleans manages the table automatically.
+
+```csharp
+siloBuilder.UseDynamoDBClustering(options =>
+{
+    options.Service = "us-east-1";
+});
+```
+
+Client configuration:
+
+```csharp
+clientBuilder.UseDynamoDBClustering(options =>
+{
+    options.Service = "us-east-1";
+});
+```
+
+## Grain Persistence
+
+Grain state is stored as DynamoDB items. Each grain's state is a single item keyed by grain type and identity.
+
+```csharp
+siloBuilder.AddDynamoDBGrainStorage(
+    name: "dynamoStore",
+    configureOptions: options =>
+    {
+        options.Service = "us-east-1";
+    });
+```
+
+See the [Grain Persistence](/guides/grain-persistence/) guide for usage patterns with `[PersistentState]`.
+
+## Reminders
+
+Persistent reminders backed by DynamoDB.
+
+```csharp
+siloBuilder.UseDynamoDBReminderService(options =>
+{
+    options.Service = "us-east-1";
+});
+```
+
+See the [Timers and Reminders](/guides/timers-and-reminders/) guide for usage patterns.
+
+## Configuration Options
+
+| Option | Description | Default |
+|---|---|---|
+| `Service` | AWS region (e.g., `"us-east-1"`) | Required |
+| `AccessKey` | AWS access key ID | From environment/profile |
+| `SecretKey` | AWS secret access key | From environment/profile |
+| `Token` | AWS session token (for temporary credentials) | `null` |
+| `ReadCapacityUnits` | Provisioned read throughput for auto-created tables | `10` |
+| `WriteCapacityUnits` | Provisioned write throughput for auto-created tables | `5` |
+
+## Authentication
+
+The DynamoDB providers use the AWS SDK credential resolution chain. In production on AWS, use IAM roles. For local development, use the AWS CLI profile or environment variables.
+
+<Tabs>
+  <TabItem label="IAM Role (Recommended)">
+    ```csharp
+    // On EC2, ECS, or Lambda — credentials are provided automatically
+    siloBuilder.UseDynamoDBClustering(options =>
+    {
+        options.Service = "us-east-1";
+    });
+    ```
+  </TabItem>
+  <TabItem label="Explicit Credentials">
+    ```csharp
+    siloBuilder.UseDynamoDBClustering(options =>
+    {
+        options.Service = "us-east-1";
+        options.AccessKey = "YOUR_ACCESS_KEY";
+        options.SecretKey = "YOUR_SECRET_KEY";
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+<Aside type="tip">
+  Use IAM roles in production instead of hardcoded credentials. On ECS, attach a task role. On EC2, use an instance profile. On Lambda, the execution role provides credentials automatically.
+</Aside>
+
+## Complete Example
+
+A full DynamoDB-backed silo configuration:
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseDynamoDBClustering(options =>
+    {
+        options.Service = "us-east-1";
+    });
+
+    siloBuilder.AddDynamoDBGrainStorage("Default", options =>
+    {
+        options.Service = "us-east-1";
+    });
+
+    siloBuilder.UseDynamoDBReminderService(options =>
+    {
+        options.Service = "us-east-1";
+    });
+});
+
+builder.Build().Run();
+```
+
+## Next Steps
+
+<CardGrid>
+  <Card title="AWS SQS" icon="setting">
+    Queue-based streaming using Amazon Simple Queue Service.
+    [View docs](/integrations/aws-sqs/)
+  </Card>
+  <Card title="Redis" icon="redis">
+    Cloud-agnostic provider for clustering, persistence, reminders, and grain directory.
+    [View docs](/integrations/redis/)
+  </Card>
+  <Card title="Grain Persistence Guide" icon="document">
+    Learn how to add durable state to grains with `[PersistentState]`.
+    [Learn more](/guides/grain-persistence/)
+  </Card>
+</CardGrid>

@@ -1,0 +1,229 @@
+---
+title: Redis
+description: Use Redis as a provider for Orleans clustering, grain persistence, reminders, and grain directory.
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+Redis is a high-performance in-memory data store that works well as an Orleans backend. It provides low-latency access for clustering, grain persistence, reminders, and grain directory — and runs on any cloud or on-premises.
+
+## Capabilities
+
+| Feature | Package |
+|---|---|
+| Clustering | `Microsoft.Orleans.Clustering.Redis` |
+| Grain Persistence | `Microsoft.Orleans.Persistence.Redis` |
+| Reminders | `Microsoft.Orleans.Reminders.Redis` |
+| Grain Directory | `Microsoft.Orleans.GrainDirectory.Redis` |
+
+## Installation
+
+```bash
+# Clustering
+dotnet add package Microsoft.Orleans.Clustering.Redis
+
+# Persistence
+dotnet add package Microsoft.Orleans.Persistence.Redis
+
+# Reminders
+dotnet add package Microsoft.Orleans.Reminders.Redis
+
+# Grain Directory
+dotnet add package Microsoft.Orleans.GrainDirectory.Redis
+```
+
+## Clustering
+
+Redis stores silo membership data for cluster discovery and failure detection.
+
+<Tabs>
+  <TabItem label="Silo">
+    ```csharp
+    siloBuilder.UseRedisClustering(options =>
+    {
+        options.ConfigurationOptions = new ConfigurationOptions
+        {
+            EndPoints = { "localhost:6379" },
+            AbortOnConnectFail = false
+        };
+    });
+    ```
+  </TabItem>
+  <TabItem label="Client">
+    ```csharp
+    clientBuilder.UseRedisClustering(options =>
+    {
+        options.ConfigurationOptions = new ConfigurationOptions
+        {
+            EndPoints = { "localhost:6379" },
+            AbortOnConnectFail = false
+        };
+    });
+    ```
+  </TabItem>
+  <TabItem label="Aspire">
+    ```csharp
+    // AppHost
+    var redis = builder.AddRedis("redis");
+
+    var orleans = builder.AddOrleans("default")
+        .WithClustering(redis);
+
+    builder.AddProject<Projects.MyApp_Silo>("silo")
+        .WithReference(orleans)
+        .WaitFor(redis);
+    ```
+
+    ```csharp
+    // Silo
+    builder.AddKeyedRedisClient("redis");
+    builder.UseOrleans();
+    ```
+  </TabItem>
+</Tabs>
+
+## Grain Persistence
+
+Grain state is serialized and stored in Redis. Supports configurable serialization formats.
+
+```csharp
+siloBuilder.AddRedisGrainStorage(
+    name: "redisStore",
+    configureOptions: options =>
+    {
+        options.ConfigurationOptions = new ConfigurationOptions
+        {
+            EndPoints = { "localhost:6379" },
+            AbortOnConnectFail = false
+        };
+    });
+```
+
+### Aspire
+
+```csharp
+// AppHost
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainStorage("Default", redis);
+```
+
+<Aside type="tip">
+  Redis persistence is a good default choice when you want a single backend for everything. In Aspire, a single Redis resource can back clustering, persistence, and reminders simultaneously.
+</Aside>
+
+## Reminders
+
+Persistent reminders backed by Redis survive silo restarts and grain deactivation.
+
+```csharp
+siloBuilder.UseRedisReminderService(options =>
+{
+    options.ConfigurationOptions = new ConfigurationOptions
+    {
+        EndPoints = { "localhost:6379" },
+        AbortOnConnectFail = false
+    };
+});
+```
+
+### Aspire
+
+```csharp
+// AppHost
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithReminders(redis);
+```
+
+See the [Timers and Reminders](/guides/timers-and-reminders/) guide for usage patterns.
+
+## Grain Directory
+
+An external grain directory backed by Redis. The default Orleans grain directory is distributed in-memory across the cluster and works well in most cases. An external Redis directory is useful when you need grain locations to survive full cluster restarts.
+
+```csharp
+siloBuilder.AddRedisGrainDirectory(
+    "redis-directory",
+    options =>
+    {
+        options.ConfigurationOptions = new ConfigurationOptions
+        {
+            EndPoints = { "localhost:6379" },
+            AbortOnConnectFail = false
+        };
+    });
+```
+
+Apply the directory to specific grain types:
+
+```csharp
+[GrainDirectory(GrainDirectoryName = "redis-directory")]
+public class MyGrain : Grain, IMyGrain { }
+```
+
+<Aside>
+  The default in-memory distributed grain directory is sufficient for most use cases. Only use an external grain directory when you specifically need directory state to persist across full cluster restarts or when you want to share directory state across independent clusters.
+</Aside>
+
+## All-in-One with Aspire
+
+The most common Redis setup uses a single Redis instance for clustering, persistence, and reminders:
+
+```csharp
+// AppHost
+var redis = builder.AddRedis("redis");
+
+var orleans = builder.AddOrleans("default")
+    .WithClustering(redis)
+    .WithGrainStorage("Default", redis)
+    .WithReminders(redis);
+
+builder.AddProject<Projects.MyApp_Silo>("silo")
+    .WithReference(orleans)
+    .WaitFor(redis);
+```
+
+```csharp
+// Silo
+builder.AddKeyedRedisClient("redis");
+builder.UseOrleans();
+```
+
+This is the setup used in the [Getting Started](/guides/getting-started/) guide.
+
+## Connection Options
+
+| Option | Description | Default |
+|---|---|---|
+| `EndPoints` | Redis server endpoints | Required |
+| `Password` | Authentication password | `null` |
+| `Ssl` | Enable TLS encryption | `false` |
+| `AbortOnConnectFail` | Throw on initial connection failure | `true` |
+| `ConnectTimeout` | Connection timeout in milliseconds | `5000` |
+| `DefaultDatabase` | Database number to use | `0` |
+
+<Aside type="tip">
+  Set `AbortOnConnectFail = false` in environments where Redis may not be available immediately at silo startup (e.g., when using Aspire or containers where services start in parallel).
+</Aside>
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Getting Started" icon="rocket">
+    Build a full Orleans + Aspire application with Redis from scratch.
+    [Learn more](/guides/getting-started/)
+  </Card>
+  <Card title="Azure Storage" icon="azure">
+    The most comprehensive Azure-native provider, covering six Orleans features.
+    [View docs](/integrations/azure-storage/)
+  </Card>
+  <Card title="ADO.NET" icon="setting">
+    Relational database providers for SQL Server, PostgreSQL, and MySQL.
+    [View docs](/integrations/ado-net/)
+  </Card>
+</CardGrid>
