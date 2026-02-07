@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import starlightSidebarTopics from "starlight-sidebar-topics";
 
 // https://astro.build/config
 export default defineConfig({
@@ -14,25 +15,41 @@ export default defineConfig({
           href: "https://github.com/dotnet/orleans",
         },
       ],
-      sidebar: [
-        {
-          label: "Getting Started",
-          items: [
-            { label: "Getting Started", slug: "guides/getting-started" },
-          ],
-        },
-        {
-          label: "Features",
-          items: [
-            { label: "Grain Persistence", slug: "features/grain-persistence" },
-            { label: "Streaming", slug: "features/streaming" },
-            { label: "Timers and Reminders", slug: "features/timers-and-reminders" },
-          ],
-        },
-        {
-          label: "Reference",
-          autogenerate: { directory: "reference" },
-        },
+      plugins: [
+        starlightSidebarTopics([
+          {
+            label: "Getting Started",
+            link: "guides/getting-started",
+            icon: "open-book",
+            items: [
+              {
+                label: "Getting Started",
+                autogenerate: { directory: "guides" },
+              },
+            ],
+          },
+          {
+            label: "Features",
+            link: "features/grain-persistence",
+            icon: "puzzle",
+            items: [
+              { label: "Grain Persistence", slug: "features/grain-persistence" },
+              { label: "Streaming", slug: "features/streaming" },
+              { label: "Timers and Reminders", slug: "features/timers-and-reminders" },
+            ],
+          },
+          {
+            label: "Reference",
+            link: "reference/example",
+            icon: "seti:json",
+            items: [
+              {
+                label: "Reference",
+                autogenerate: { directory: "reference" },
+              },
+            ],
+          },
+        ]),
       ],
     }),
   ],
